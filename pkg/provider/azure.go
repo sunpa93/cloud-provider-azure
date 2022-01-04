@@ -47,6 +47,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/klog/v2"
+	"k8s.io/klog/v2/klogr"
 
 	"sigs.k8s.io/cloud-provider-azure/pkg/auth"
 	azclients "sigs.k8s.io/cloud-provider-azure/pkg/azureclients"
@@ -974,17 +975,12 @@ func initDiskControllers(az *Cloud) error {
 
 	attachDetachRateLimiter := rate.NewLimiter(qps, bucket)
 
-	loggerAdapter := batch.NewLoggerAdapter(
-		batch.WithVerboseLogger(klog.V(3).Infof),
-		batch.WithInfoLogger(klog.Infof),
-		batch.WithWarningLogger(klog.Warningf),
-		batch.WithErrorLogger(klog.Errorf),
-	)
+	logger := klogr.NewWithOptions(klogr.WithFormat(klogr.FormatKlog)).WithName("cloud-provider-azure").WithValues("type", "batch")
 
 	processorOptions := []batch.ProcessorOption{
+		batch.WithVerboseLogLevel(3),
 		batch.WithDelayBeforeStart(1 * time.Second),
 		batch.WithGlobalLimiter(attachDetachRateLimiter),
-		batch.WithLogger(loggerAdapter),
 	}
 
 	attachBatchFn := func(ctx context.Context, key string, values []interface{}) ([]interface{}, error) {
@@ -1009,6 +1005,7 @@ func initDiskControllers(az *Cloud) error {
 	}
 
 	attachDiskProcessOptions := append(processorOptions,
+		batch.WithLogger(logger.WithValues("operation", "attach_disk")),
 		batch.WithMetricsRecorder(metrics.NewBatchProcessorMetricsRecorder("batch", "updateasync", "attach_disk")))
 
 	detachBatchFn := func(ctx context.Context, key string, values []interface{}) ([]interface{}, error) {
@@ -1028,6 +1025,7 @@ func initDiskControllers(az *Cloud) error {
 	}
 
 	detachDiskProcessorOptions := append(processorOptions,
+		batch.WithLogger(logger.WithValues("operation", "detach_disk")),
 		batch.WithMetricsRecorder(metrics.NewBatchProcessorMetricsRecorder("batch", "update", "detach_disk")))
 
 	common.attachDiskProcessor = batch.NewProcessor(attachBatchFn, attachDiskProcessOptions...)

@@ -20,10 +20,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-logr/stdr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
@@ -43,7 +46,7 @@ type testProcessorMetricsRecorder struct {
 var (
 	testMetrics             = testProcessorMetricsRecorder{}
 	errProcessFailed        = errors.New("process failed")
-	defaultLogger           = NewStandardLogger(WithVerboseLogging())
+	defaultLogger           = stdr.New(log.New(os.Stderr, "", log.LstdFlags))
 	defaultProcessorOptions = []ProcessorOption{
 		WithLogger(defaultLogger),
 		WithMetricsRecorder(&testMetrics),
@@ -221,6 +224,9 @@ func (r *testProcessorMetricsRecorder) reset() {
 }
 
 func TestProcessorDo(t *testing.T) {
+	oldVerbosity := stdr.SetVerbosity(3)
+	defer stdr.SetVerbosity(oldVerbosity)
+
 	for _, test := range processorDoTestCases {
 		test := test
 		t.Run(test.description, func(t *testing.T) {
@@ -298,6 +304,9 @@ func TestProcessorDo(t *testing.T) {
 }
 
 func TestProcessorDoChan(t *testing.T) {
+	oldVerbosity := stdr.SetVerbosity(3)
+	defer stdr.SetVerbosity(oldVerbosity)
+
 	for _, test := range processorDoTestCases {
 		test := test
 		t.Run(test.description, func(t *testing.T) {
