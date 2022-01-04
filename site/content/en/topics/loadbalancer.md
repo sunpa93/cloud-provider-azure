@@ -30,8 +30,10 @@ Below is a list of annotations supported for Kubernetes services with type `Load
 | `service.beta.kubernetes.io/azure-pip-name` | Name of PIP | Specify the PIP that will be applied to load balancer | v1.16 and later |
 | `service.beta.kubernetes.io/azure-load-balancer-disable-tcp-reset` | `true` | Disable `enableTcpReset` for SLB | v1.16-v1.18. The annotation has been deprecated and would be removed in a future release. |
 | `service.beta.kubernetes.io/azure-pip-tags` | Tags of the PIP | Specify the tags of the PIP that will be associated to the load balancer typed service. [Doc](../tagging-resources) | v1.20 and later |
-| `service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol` | Health probe protocol of the load balancer typed service | Refer the detailed docs [here](../custom-health-probe) | v1.20 and later |
-| `service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path` | Request path of the health probe | Refer the detailed docs [here](../custom-health-probe) | v1.20 and later |
+| `service.beta.kubernetes.io/azure-load-balancer-health-probe-interval` | Health probe interval |  Refer the detailed docs [here](#custom-load-balancer-health-probe) | v1.21 and later  |
+| `service.beta.kubernetes.io/azure-load-balancer-health-probe-num-of-probe` | The minimum number of unhealthy responses of health probe  |  Refer the detailed docs [here](#custom-load-balancer-health-probe) |	v1.21 and later |
+| `service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol` | Health probe protocol of the load balancer typed service | Refer the detailed docs [here](#custom-load-balancer-health-probe) | v1.20 and later |
+| `service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path` | Request path of the health probe | Refer the detailed docs [here](#custom-load-balancer-health-probe) | v1.20 and later |
 | `service.beta.kubernetes.io/azure-load-balancer-enable-high-availability-ports` | Enable [high availability ports](https://docs.microsoft.com/en-us/azure/load-balancer/load-balancer-ha-ports-overview) on internal SLB | HA ports is required when applications require IP fragments | v1.20 and later |
 | `service.beta.kubernetes.io/azure-deny-all-except-load-balancer-source-ranges` | `true` or `false` | Deny all traffic to the service. This is helpful when the `service.Spec.LoadBalancerSourceRanges` is set to an internal load balancer typed service. When set the loadBalancerSourceRanges field on the service in order to whitelist ip src addresses, although the generated NSG has added the rules for loadBalancerSourceRanges, the default rule (65000) will allow any vnet traffic, basically meaning the whitelist is of no use. This annotation solves this issue. | v1.21 and later |
 | `service.beta.kubernetes.io/azure-additional-public-ips` | External public IPs besides the service's own public IP | It is mainly used for global VIP on Azure cross-region LoadBalancer | v1.20 and later with out-of-tree cloud provider |
@@ -124,6 +126,61 @@ spec:
       port: 30102
       targetPort: 30102
 ```
+
+## Multiple Standard LoadBalancer per cluster
+
+> This feature is supported since v1.20.0.
+
+There is only one external and one internal Standard Load Balancer (SLB) at most per cluster. Set `enableMultipleStandardLoadBalancers=true` in the cloud config if you want to turn on the multiple SLB mode. Similar to the basic LB, there will be a 1:1 mapping between each SLB and VMSS/VMAS. The SLB of the primary VMSS/VMAS will be named after `clusterName` in the cloud config (in AKS, it would be `kubernetes`) while the name of those belonging to non-primary VMSS/VMAS will be the name of the corresponding vmSet.
+
+> If the cluster provisioning tools like ASK-Engine and CAPZ don't proactively create a dedicated SLB for each VMSS/VMAS when enabling multiple SLB, only the primary SLB would be created. You could manually trigger the creation by setting the service annotation `service.beta.kubernetes.io/azure-load-balancer-mode` to bind the service to that VMSS/VMAS. The dedicated SLB would be created once the service reconcile loop is done. Unlike the primary SLB, there is no default outbound rules/IPs for the non-primary SLBs. That means the SLB would be deleted once all the services referencing it are deleted.
+
+### Choose which SLB to use
+
+The service annotation `service.beta.kubernetes.io/azure-load-balancer-mode` will be respected as long as `enableMultipleStandardLoadBalancers=true` when using standard LB, and the usage is the same as it is in the basic LB clusters. Specifically, there are three selection mode: `default` to select the primary SLB; `__auto__` to select the SLB with minimum rules and `vmSetName` to select the dedicated SLB of that VMSS/VMAS.
+
+### Outbound Connections of non-primary VMSS/VMAS
+
+The outbound rules of the non-primary SLB are not managed by cloud provider azure. Instead, it should be managed by cluster provisioning tools. For now, there is no outbound configuration for the non-primary VMSS/VMAS, but we plan to support customized outbound configurations in AKS and CAPZ in the future.
+
+### Sharing the primary SLB with multiple VMSS/VMAS
+
+> This feature is supported since v1.21.0
+
+For each non-primary VMSS/VMAS, one can determine to use dedicated SLB or share the primary SLB. If the VMSS/VMAS names are in the cloud config `nodepoolsWithoutDedicatedSLB`, those would join the backend pool of the primary SLB while the others would remain to have dedicated SLBs. If the VMSS/VMAS supposed to share the primary SLB owns a dedicated SLB, the dedicated one would be deleted, and the VMSS/VMAS would be joint the primary SLB's backend pool.
+
+## Custom Load Balancer health probe
+
+Currently, the protocol of the health probe is defined as below:
+
+1. for local services, HTTP and /healthz would be used;
+1. for cluster TCP services, TCP would be used;
+1. for cluster UDP services, no health probes.
+
+Since v1.20, two service annotations `service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol` and `service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path` are introduced, which determine the new health probe behavior. If the `service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol` is set, both local and cluster TCP services would use the specified health probe protocol. If the `service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path` is set, the specified request path would be used instead of `/healthz`. Note that the request path would be ignored when using TCP or the `service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol` is empty. More specifically:
+
+| `externalTrafficPolicy` | `service.beta.kubernetes.io/azure-load-balancer-health-probe-protocol` | `service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path` | protocol | request path |
+| ------------------------------------------------------------ | ---------------------------- | ------------------------------------------------------------ |------| ----- |
+| local |  | (ignored) | http | `/healthz` |
+| local | tcp | (ignored) | tcp | null |
+| local | http/https | | http/https | `/healthz` |
+| local | http/https | `/custom-path` | http/https | `/custom-path` |
+| cluster |  | (ignored) | tcp | null |
+| cluster | tcp | (ignored) | tcp | null |
+| cluster | http/https | | http/https | `/healthz` |
+| cluster | http/https | `/custom-path` | http/https | `/custom-path` |
+
+Since v1.21, two service annotations `service.beta.kubernetes.io/azure-load-balancer-health-probe-interval` and `load-balancer-health-probe-num-of-probe` are introduced, which customize the configuration of health probe. If `service.beta.kubernetes.io/azure-load-balancer-health-probe-interval` is not set, Default value of 5 is applied. If `load-balancer-health-probe-num-of-probe` is not set, Default value of 2 is applied. And total probe should be less than 120 seconds.
+
+## Configure Load Balancer backend
+
+> This feature is supported since v1.23.0
+
+The backend pool type can be configured by specifying `loadBalancerBackendPoolConfigurationType` in the cloud configuration file. There are three possible values:
+
+1. `nodeIPConfiguration` (default). In this case we attach nodes to the LB by calling the VMSS/NIC API to associate the corresponding node IP configuration with the LB backend pool.
+2. `nodeIP`. In this case we attach nodes to the LB by calling the LB API to add the node private IP addresses to the LB backend pool.
+3. `podIP` (not supported yet). In this case we do not attach nodes to the LB. Instead we directly adding pod IPs to the LB backend pool.
 
 ## Load balancer limits
 
