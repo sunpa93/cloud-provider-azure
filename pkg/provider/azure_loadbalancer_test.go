@@ -34,10 +34,8 @@ import (
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
-
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/loadbalancerclient/mockloadbalancerclient"
 	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/publicipclient/mockpublicipclient"
 	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/securitygroupclient/mocksecuritygroupclient"
@@ -4516,9 +4514,6 @@ func TestReconcileSharedLoadBalancer(t *testing.T) {
 										{
 											ID: to.StringPtr("vmss2-nic-1"),
 										},
-										{
-											ID: to.StringPtr("vmss1-nic-1"),
-										},
 									},
 								},
 							},
@@ -4536,9 +4531,6 @@ func TestReconcileSharedLoadBalancer(t *testing.T) {
 										{
 											ID: to.StringPtr("vmss2-nic-1"),
 										},
-										{
-											ID: to.StringPtr("vmss1-nic-1"),
-										},
 									},
 								},
 							},
@@ -4549,130 +4541,6 @@ func TestReconcileSharedLoadBalancer(t *testing.T) {
 			expectedListCount:     1,
 			expectedGetNamesCount: 1,
 			expectedDeleteCount:   1,
-		},
-		{
-			description:             "reconcileSharedLoadBalancer should decouple the vmSet from its dedicated lb if the vmSet is sharing the primary slb",
-			useMultipleSLBs:         true,
-			useVMIP:                 true,
-			vmSetsSharingPrimarySLB: "vmss1,vmss2",
-			nodes: []*v1.Node{
-				{
-					ObjectMeta: metav1.ObjectMeta{Name: "vmss1"},
-					Status: v1.NodeStatus{
-						Addresses: []v1.NodeAddress{
-							{
-								Type:    v1.NodeInternalIP,
-								Address: "10.0.0.1",
-							},
-						},
-					},
-				},
-				{
-					ObjectMeta: metav1.ObjectMeta{Name: "vmss2"},
-					Status: v1.NodeStatus{
-						Addresses: []v1.NodeAddress{
-							{
-								Type:    v1.NodeInternalIP,
-								Address: "10.0.0.2",
-							},
-						},
-					},
-				},
-			},
-			existingLBs: []network.LoadBalancer{
-				{
-					Name: to.StringPtr("kubernetes"),
-					LoadBalancerPropertiesFormat: &network.LoadBalancerPropertiesFormat{
-						BackendAddressPools: &[]network.BackendAddressPool{
-							{
-								Name:                               to.StringPtr("kubernetes"),
-								BackendAddressPoolPropertiesFormat: &network.BackendAddressPoolPropertiesFormat{},
-							},
-						},
-					},
-				},
-				{
-					Name: to.StringPtr("kubernetes-internal"),
-					LoadBalancerPropertiesFormat: &network.LoadBalancerPropertiesFormat{
-						BackendAddressPools: &[]network.BackendAddressPool{
-							{
-								Name:                               to.StringPtr("kubernetes"),
-								BackendAddressPoolPropertiesFormat: &network.BackendAddressPoolPropertiesFormat{},
-							},
-						},
-					},
-				},
-				{
-					Name: to.StringPtr("vmss1"),
-					LoadBalancerPropertiesFormat: &network.LoadBalancerPropertiesFormat{
-						BackendAddressPools: &[]network.BackendAddressPool{
-							{
-								Name:                               to.StringPtr("kubernetes"),
-								BackendAddressPoolPropertiesFormat: &network.BackendAddressPoolPropertiesFormat{},
-							},
-						},
-					},
-				},
-				{
-					Name: to.StringPtr("vmss1-internal"),
-					LoadBalancerPropertiesFormat: &network.LoadBalancerPropertiesFormat{
-						BackendAddressPools: &[]network.BackendAddressPool{
-							{
-								Name:                               to.StringPtr("kubernetes"),
-								BackendAddressPoolPropertiesFormat: &network.BackendAddressPoolPropertiesFormat{},
-							},
-						},
-					},
-				},
-			},
-			expectedLBs: []network.LoadBalancer{
-				{
-					Name: to.StringPtr("kubernetes"),
-					LoadBalancerPropertiesFormat: &network.LoadBalancerPropertiesFormat{
-						BackendAddressPools: &[]network.BackendAddressPool{
-							{
-								Name: to.StringPtr("kubernetes"),
-								BackendAddressPoolPropertiesFormat: &network.BackendAddressPoolPropertiesFormat{
-									LoadBalancerBackendAddresses: &[]network.LoadBalancerBackendAddress{
-										{
-											Name: to.StringPtr("vmss1"),
-											LoadBalancerBackendAddressPropertiesFormat: &network.LoadBalancerBackendAddressPropertiesFormat{
-												VirtualNetwork: &network.SubResource{ID: to.StringPtr("/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet")},
-												IPAddress:      to.StringPtr("10.0.0.1"),
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-				{
-					Name: to.StringPtr("kubernetes-internal"),
-					LoadBalancerPropertiesFormat: &network.LoadBalancerPropertiesFormat{
-						BackendAddressPools: &[]network.BackendAddressPool{
-							{
-								Name: to.StringPtr("kubernetes"),
-								BackendAddressPoolPropertiesFormat: &network.BackendAddressPoolPropertiesFormat{
-									LoadBalancerBackendAddresses: &[]network.LoadBalancerBackendAddress{
-										{
-											Name: to.StringPtr("vmss1"),
-											LoadBalancerBackendAddressPropertiesFormat: &network.LoadBalancerBackendAddressPropertiesFormat{
-												VirtualNetwork: &network.SubResource{ID: to.StringPtr("/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet")},
-												IPAddress:      to.StringPtr("10.0.0.1"),
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			expectedListCount:                      1,
-			expectedGetNamesCount:                  1,
-			expectedCreateOrUpdateBackendPoolCount: 2,
-			expectedDeleteCount:                    1,
 		},
 		{
 			description:       "reconcileSharedLoadBalancer should do nothing if the basic load balancer is used",
@@ -4737,27 +4605,9 @@ func TestReconcileSharedLoadBalancer(t *testing.T) {
 			mockVMSet := NewMockVMSet(ctrl)
 			mockVMSet.EXPECT().EnsureBackendPoolDeleted(gomock.Any(), "/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/vmss1/backendAddressPools/kubernetes", "vmss1", gomock.Any(), gomock.Any()).Return(nil).Times(tc.expectedDeleteCount)
 			mockVMSet.EXPECT().EnsureBackendPoolDeleted(gomock.Any(), "/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/vmss1-internal/backendAddressPools/kubernetes", "vmss1", gomock.Any(), gomock.Any()).Return(nil).Times(tc.expectedDeleteCount)
-			mockVMSet.EXPECT().EnsureHostsInPool(gomock.Any(), gomock.Any(), "/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/kubernetes/backendAddressPools/kubernetes", "vmss1").Return(nil).Times(tc.expectedDeleteCount)
-			mockVMSet.EXPECT().EnsureHostsInPool(gomock.Any(), gomock.Any(), "/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/kubernetes-internal/backendAddressPools/kubernetes", "vmss1").Return(nil).Times(tc.expectedDeleteCount)
 			mockVMSet.EXPECT().GetAgentPoolVMSetNames(gomock.Any()).Return(&[]string{"vmss1", "vmss2"}, nil).MaxTimes(tc.expectedGetNamesCount)
 			mockVMSet.EXPECT().GetPrimaryVMSetName().Return("vmss2").AnyTimes()
-			mockVMSet.EXPECT().GetNodeVMSetName(gomock.Any()).DoAndReturn(func(node *v1.Node) (string, error) {
-				return node.ObjectMeta.Name, nil
-			}).AnyTimes()
 			cloud.VMSet = mockVMSet
-
-			mockLBBackendPool := cloud.LoadBalancerBackendPool.(*MockBackendPool)
-			mockLBBackendPool.EXPECT().EnsureHostsInPool(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(func(service *v1.Service, nodes []*v1.Node, backendPoolID, vmSetName, clusterName, lbName string, backendPool network.BackendAddressPool) error {
-				*backendPool.LoadBalancerBackendAddresses = append(*backendPool.LoadBalancerBackendAddresses, network.LoadBalancerBackendAddress{
-					Name: to.StringPtr("vmss1"),
-					LoadBalancerBackendAddressPropertiesFormat: &network.LoadBalancerBackendAddressPropertiesFormat{
-						VirtualNetwork: &network.SubResource{ID: to.StringPtr("/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet")},
-						IPAddress:      to.StringPtr("10.0.0.1"),
-					},
-				})
-
-				return nil
-			}).AnyTimes()
 
 			service := getTestService("test", v1.ProtocolTCP, nil, false, 80)
 			lbs, err := cloud.reconcileSharedLoadBalancer(&service, "kubernetes", tc.nodes)
@@ -4853,5 +4703,135 @@ func TestGetClusterFromPIPClusterTags(t *testing.T) {
 	for i, c := range tests {
 		actual := getClusterFromPIPClusterTags(c.tags)
 		assert.Equal(t, actual, c.expected, "TestCase[%d]: %s", i, c.desc)
+	}
+}
+
+func Test_getInt32FromAnnotations(t *testing.T) {
+	type args struct {
+		annotations       map[string]string
+		key               string
+		businessValidator []Int32BusinessValidator
+	}
+	key := "testkey"
+	tests := []struct {
+		name    string
+		args    args
+		want    *int32
+		wantErr bool
+	}{
+		{name: "no key specified", args: args{}, want: nil, wantErr: true},
+		{name: "no key specified even though annotation set is not empty", args: args{annotations: map[string]string{key: ""}}, want: nil, wantErr: true},
+		{name: "no annotation", args: args{key: key}, want: nil, wantErr: false},
+		{name: "annotation empty value", args: args{annotations: map[string]string{key: ""}, key: key}, wantErr: true},
+		{name: "annotation not a number", args: args{annotations: map[string]string{key: "cookies"}, key: key}, wantErr: true},
+		{name: "annotation zero value", args: args{annotations: map[string]string{key: "0"}, key: key}, wantErr: false, want: to.Int32Ptr(0)},
+		{name: "annotation float value", args: args{annotations: map[string]string{key: "0.1"}, key: key}, wantErr: true},
+		{name: "annotation positive value", args: args{annotations: map[string]string{key: "24"}, key: key}, want: to.Int32Ptr(24), wantErr: false},
+		{name: "annotation negative value", args: args{annotations: map[string]string{key: "-6"}, key: key}, want: to.Int32Ptr(-6), wantErr: false},
+		{name: "validator is nil", args: args{annotations: map[string]string{key: "-6"}, key: key, businessValidator: []Int32BusinessValidator{
+			nil,
+		}}, want: to.Int32Ptr(-6), wantErr: false},
+		{name: "validator failed", args: args{annotations: map[string]string{key: "-6"}, key: key, businessValidator: []Int32BusinessValidator{
+			func(i *int32) error {
+				return fmt.Errorf("validator failed")
+			},
+		}}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := getInt32FromAnnotations(tt.args.annotations, tt.args.key, tt.args.businessValidator...)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("getInt32FromAnnotations() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("getInt32FromAnnotations() = %v, want %v", *got, *tt.want)
+			}
+		})
+	}
+}
+
+func Test_getProbeIntervalInSecondsAndNumOfProbe(t *testing.T) {
+	type args struct {
+		annotations map[string]string
+	}
+	tests := []struct {
+		name              string
+		args              args
+		wantProveInterval *int32
+		wantNumOfProbe    *int32
+		wantErr           bool
+	}{
+		{
+			name: "numOfProbe * probeInterval is not less than 120",
+			args: args{
+				annotations: map[string]string{
+					consts.ServiceAnnotationLoadBalancerHealthProbeInterval:   "60",
+					consts.ServiceAnnotationLoadBalancerHealthProbeNumOfProbe: "2",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "numOfProbe and probeInterval should be type of integer",
+			args: args{
+				annotations: map[string]string{
+					consts.ServiceAnnotationLoadBalancerHealthProbeInterval:   "48.0",
+					consts.ServiceAnnotationLoadBalancerHealthProbeNumOfProbe: "2",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid numOfProbe",
+			args: args{
+				annotations: map[string]string{
+					consts.ServiceAnnotationLoadBalancerHealthProbeInterval:   "48",
+					consts.ServiceAnnotationLoadBalancerHealthProbeNumOfProbe: "1",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid probeInterval",
+			args: args{
+				annotations: map[string]string{
+					consts.ServiceAnnotationLoadBalancerHealthProbeInterval:   "3",
+					consts.ServiceAnnotationLoadBalancerHealthProbeNumOfProbe: "5",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid numOfProbe and probeInterval",
+			args: args{
+				annotations: map[string]string{
+					consts.ServiceAnnotationLoadBalancerHealthProbeInterval:   "48",
+					consts.ServiceAnnotationLoadBalancerHealthProbeNumOfProbe: "2",
+				},
+			},
+			wantProveInterval: to.Int32Ptr(48),
+			wantNumOfProbe:    to.Int32Ptr(2),
+			wantErr:           false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotPodInterval, gotNumOfProbe, err := getProbeIntervalInSecondsAndNumOfProbe(&v1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: tt.args.annotations,
+				},
+			})
+			if (err != nil) != tt.wantErr {
+				t.Errorf("getProbeIntervalInSecondsAndNumOfProbe() gotPodInterval = %v, gotNumOfProbe = %v, error = %v, wantErr %v", *gotPodInterval, *gotNumOfProbe, err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(gotPodInterval, tt.wantProveInterval) {
+				t.Errorf("getProbeIntervalInSecondsAndNumOfProbe() got = %v, want %v", *gotPodInterval, *tt.wantProveInterval)
+			}
+			if !reflect.DeepEqual(gotNumOfProbe, tt.wantNumOfProbe) {
+				t.Errorf("getProbeIntervalInSecondsAndNumOfProbe() got1 = %v, want %v", *gotNumOfProbe, *tt.wantProveInterval)
+			}
+		})
 	}
 }
