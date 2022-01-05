@@ -17,13 +17,16 @@ limitations under the License.
 package batch
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-logr/stdr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
@@ -43,7 +46,8 @@ type testProcessorMetricsRecorder struct {
 var (
 	testMetrics             = testProcessorMetricsRecorder{}
 	errProcessFailed        = errors.New("process failed")
-	defaultLogger           = NewStandardLogger(WithVerboseLogging())
+	logBuffer               = bytes.Buffer{}
+	defaultLogger           = stdr.New(log.New(&logBuffer, "", log.LstdFlags))
 	defaultProcessorOptions = []ProcessorOption{
 		WithLogger(defaultLogger),
 		WithMetricsRecorder(&testMetrics),
@@ -59,6 +63,7 @@ var (
 		expectedErr          error
 		failEvery            int
 		expectRateLimitDelay bool
+		expectedLog          string
 	}{
 		{
 			description:     "[Success] Single entry",
@@ -89,6 +94,7 @@ var (
 			processDuration: 100 * time.Millisecond,
 			timeout:         1 * time.Minute,
 			options:         append(defaultProcessorOptions, WithDelayBeforeStart(50*time.Millisecond)),
+			expectedLog:     "Delayed processing of batch due to start delay",
 		},
 		{
 			description:          "[Success] Multiple entries & batches - 20ms/value, batch rate limit of 1 QPS",
@@ -98,6 +104,7 @@ var (
 			timeout:              2 * time.Minute,
 			options:              append(defaultProcessorOptions, WithBatchLimits(rate.Limit(1.0), 1)),
 			expectRateLimitDelay: true,
+			expectedLog:          "Delayed processing of batch due to client-side throttling",
 		},
 		{
 			description:          "[Success] Multiple entries & batches - 20ms/value, global rate limit of 5 QPS",
@@ -107,6 +114,7 @@ var (
 			timeout:              2 * time.Minute,
 			options:              append(defaultProcessorOptions, WithGlobalLimits(rate.Limit(5.0), 1)),
 			expectRateLimitDelay: true,
+			expectedLog:          "Delayed processing of batch due to client-side throttling",
 		},
 		{
 			description:     "[Partial] Partial success with multiple entries & batches - race",
@@ -221,6 +229,10 @@ func (r *testProcessorMetricsRecorder) reset() {
 }
 
 func TestProcessorDo(t *testing.T) {
+	oldVerbosity := stdr.SetVerbosity(3)
+	defer stdr.SetVerbosity(oldVerbosity)
+	logBuffer.Reset()
+
 	for _, test := range processorDoTestCases {
 		test := test
 		t.Run(test.description, func(t *testing.T) {
@@ -293,11 +305,19 @@ func TestProcessorDo(t *testing.T) {
 			}
 
 			testMetrics.verifyMetrics(t, 5, test.expectRateLimitDelay, test.expectedErr)
+
+			if len(test.expectedLog) > 0 {
+				assert.Contains(t, logBuffer.String(), test.expectedLog)
+			}
 		})
 	}
 }
 
 func TestProcessorDoChan(t *testing.T) {
+	oldVerbosity := stdr.SetVerbosity(3)
+	defer stdr.SetVerbosity(oldVerbosity)
+	logBuffer.Reset()
+
 	for _, test := range processorDoTestCases {
 		test := test
 		t.Run(test.description, func(t *testing.T) {
@@ -378,6 +398,10 @@ func TestProcessorDoChan(t *testing.T) {
 			}
 
 			testMetrics.verifyMetrics(t, 5, test.expectRateLimitDelay, test.expectedErr)
+
+			if len(test.expectedLog) > 0 {
+				assert.Contains(t, logBuffer.String(), test.expectedLog)
+			}
 		})
 	}
 }
