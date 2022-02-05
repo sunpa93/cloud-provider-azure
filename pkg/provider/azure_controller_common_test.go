@@ -318,6 +318,9 @@ func TestCommonUpdateVM(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
+	ctx, cancel := getContextWithCancel()
+	defer cancel()
+
 	testCases := []struct {
 		desc             string
 		vmList           map[string]string
@@ -372,7 +375,7 @@ func TestCommonUpdateVM(t *testing.T) {
 			mockVMsClient.EXPECT().Update(gomock.Any(), testCloud.ResourceGroup, gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		}
 
-		err := testCloud.UpdateVM(test.nodeName)
+		err := testCloud.UpdateVM(ctx, test.nodeName)
 		assert.Equal(t, test.expectedErr, err != nil, "TestCase[%d]: %s, err: %v", i, test.desc, err)
 	}
 }
