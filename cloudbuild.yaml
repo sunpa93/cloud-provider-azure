@@ -1,13 +1,13 @@
 # See https://cloud.google.com/cloud-build/docs/build-config
 
 # this must be specified in seconds. If omitted, defaults to 600s (10 mins)
-timeout: 2400s
+timeout: 7200s
 # this prevents errors if you don't use both _GIT_TAG and _PULL_BASE_REF,
 # or any new substitutions added in the future.
 options:
   substitution_option: ALLOW_LOOSE
 steps:
-  - name: "gcr.io/k8s-staging-test-infra/gcb-docker-gcloud:v20211118-2f2d816b90"
+  - name: "gcr.io/k8s-staging-test-infra/gcb-docker-gcloud:v20220314-46af1b01a6"
     entrypoint: make
     env:
       - TAG=${_GIT_TAG}
@@ -17,6 +17,7 @@ steps:
       - DOCKER_CLI_EXPERIMENTAL=enabled
       - DOCKER_BUILDKIT=1
       - IMAGE_REGISTRY=gcr.io/k8s-staging-provider-azure
+      - DOCKER_BUILDX=/root/.docker/cli-plugins/docker-buildx
     args:
       - release-staging
 substitutions:

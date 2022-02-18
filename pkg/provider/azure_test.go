@@ -38,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/informers"
 	cloudprovider "k8s.io/cloud-provider"
+	cloudproviderapi "k8s.io/cloud-provider/api"
 	servicehelpers "k8s.io/cloud-provider/service/helpers"
 
 	"sigs.k8s.io/cloud-provider-azure/pkg/auth"
@@ -1732,6 +1733,7 @@ func validateLoadBalancer(t *testing.T, loadBalancer *network.LoadBalancer, serv
 			foundProbe := false
 			if servicehelpers.NeedsHealthCheck(&services[i]) {
 				path, port := servicehelpers.GetServiceHealthCheckPathPort(&services[i])
+				wantedRuleName := az.getLoadBalancerRuleName(&services[i], v1.ProtocolTCP, port)
 				for _, actualProbe := range *loadBalancer.Probes {
 					if strings.EqualFold(*actualProbe.Name, wantedRuleName) &&
 						*actualProbe.Port == port &&
@@ -3160,44 +3162,49 @@ func TestCanCombineSharedAndPrivateRulesInSameGroup(t *testing.T) {
 	}
 }
 
-func TestGetResourceGroupFromDiskURI(t *testing.T) {
+func TestGetInfoFromDiskURI(t *testing.T) {
 	tests := []struct {
 		diskURL        string
-		expectedResult string
+		expectedRG     string
+		expectedSubsID string
 		expectError    bool
 	}{
 		{
 			diskURL:        "/subscriptions/4be8920b-2978-43d7-axyz-04d8549c1d05/resourceGroups/azure-k8s1102/providers/Microsoft.Compute/disks/andy-mghyb1102-dynamic-pvc-f7f014c9-49f4-11e8-ab5c-000d3af7b38e",
-			expectedResult: "azure-k8s1102",
+			expectedRG:     "azure-k8s1102",
+			expectedSubsID: "4be8920b-2978-43d7-axyz-04d8549c1d05",
 			expectError:    false,
 		},
 		{
 			// case insensitive check
 			diskURL:        "/subscriptions/4be8920b-2978-43d7-axyz-04d8549c1d05/resourcegroups/azure-k8s1102/providers/Microsoft.Compute/disks/andy-mghyb1102-dynamic-pvc-f7f014c9-49f4-11e8-ab5c-000d3af7b38e",
-			expectedResult: "azure-k8s1102",
+			expectedRG:     "azure-k8s1102",
+			expectedSubsID: "4be8920b-2978-43d7-axyz-04d8549c1d05",
 			expectError:    false,
 		},
 		{
-			diskURL:        "/4be8920b-2978-43d7-axyz-04d8549c1d05/resourceGroups/azure-k8s1102/providers/Microsoft.Compute/disks/andy-mghyb1102-dynamic-pvc-f7f014c9-49f4-11e8-ab5c-000d3af7b38e",
-			expectedResult: "",
-			expectError:    true,
+			diskURL:     "/4be8920b-2978-43d7-axyz-04d8549c1d05/resourceGroups/azure-k8s1102/providers/Microsoft.Compute/disks/andy-mghyb1102-dynamic-pvc-f7f014c9-49f4-11e8-ab5c-000d3af7b38e",
+			expectedRG:  "",
+			expectError: true,
 		},
 		{
-			diskURL:        "",
-			expectedResult: "",
-			expectError:    true,
+			diskURL:     "",
+			expectedRG:  "",
+			expectError: true,
 		},
 	}
 
 	for _, test := range tests {
-		result, err := getResourceGroupFromDiskURI(test.diskURL)
-		assert.Equal(t, result, test.expectedResult, "Expect result not equal with getResourceGroupFromDiskURI(%s) return: %q, expected: %q",
-			test.diskURL, result, test.expectedResult)
+		rg, subsID, err := getInfoFromDiskURI(test.diskURL)
+		assert.Equal(t, rg, test.expectedRG, "Expect result not equal with getInfoFromDiskURI(%s) return: %q, expected: %q",
+			test.diskURL, rg, test.expectedRG)
+		assert.Equal(t, subsID, test.expectedSubsID, "Expect result not equal with getInfoFromDiskURI(%s) return: %q, expected: %q",
+			test.diskURL, subsID, test.expectedSubsID)
 
 		if test.expectError {
-			assert.NotNil(t, err, "Expect error during getResourceGroupFromDiskURI(%s)", test.diskURL)
+			assert.NotNil(t, err, "Expect error during getInfoFromDiskURI(%s)", test.diskURL)
 		} else {
-			assert.Nil(t, err, "Expect error is nil during getResourceGroupFromDiskURI(%s)", test.diskURL)
+			assert.Nil(t, err, "Expect error is nil during getInfoFromDiskURI(%s)", test.diskURL)
 		}
 	}
 }
@@ -3318,7 +3325,7 @@ func TestUpdateNodeCaches(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	az := GetTestCloud(ctrl)
-
+	// delete node appearing in unmanagedNodes and excludeLoadBalancerNodes
 	zone := fmt.Sprintf("%s-0", az.Location)
 	nodesInZone := sets.NewString("prevNode")
 	az.nodeZones = map[string]sets.String{zone: nodesInZone}
@@ -3342,9 +3349,10 @@ func TestUpdateNodeCaches(t *testing.T) {
 	assert.Equal(t, 0, len(az.nodeZones[zone]))
 	assert.Equal(t, 0, len(az.nodeResourceGroups))
 	assert.Equal(t, 0, len(az.unmanagedNodes))
-	assert.Equal(t, 0, len(az.excludeLoadBalancerNodes))
+	assert.Equal(t, 1, len(az.excludeLoadBalancerNodes))
 	assert.Equal(t, 0, len(az.nodeNames))
 
+	// add new (unmanaged and to-be-excluded) node
 	newNode := v1.Node{
 		ObjectMeta: metav1.ObjectMeta{
 			Labels: map[string]string{
@@ -3361,8 +3369,89 @@ func TestUpdateNodeCaches(t *testing.T) {
 	assert.Equal(t, 1, len(az.nodeZones[zone]))
 	assert.Equal(t, 1, len(az.nodeResourceGroups))
 	assert.Equal(t, 1, len(az.unmanagedNodes))
-	assert.Equal(t, 1, len(az.excludeLoadBalancerNodes))
+	assert.Equal(t, 2, len(az.excludeLoadBalancerNodes))
 	assert.Equal(t, 1, len(az.nodeNames))
+}
+
+func TestUpdateNodeCacheExcludeLoadBalancer(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	az := GetTestCloud(ctrl)
+
+	zone := fmt.Sprintf("%s-0", az.Location)
+	nodesInZone := sets.NewString("aNode")
+	az.nodeZones = map[string]sets.String{zone: nodesInZone}
+	az.nodeResourceGroups = map[string]string{"aNode": "rg"}
+
+	// a non-ready node should be excluded
+	az.unmanagedNodes = sets.NewString()
+	az.excludeLoadBalancerNodes = sets.NewString()
+	az.nodeNames = sets.NewString()
+	nonReadyNode := v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{
+				v1.LabelTopologyZone: zone,
+			},
+			Name: "aNode",
+		},
+		Status: v1.NodeStatus{
+			Conditions: []v1.NodeCondition{
+				{
+					Type:   v1.NodeReady,
+					Status: v1.ConditionFalse,
+				},
+			},
+		},
+	}
+	az.updateNodeCaches(nil, &nonReadyNode)
+	assert.Equal(t, 1, len(az.excludeLoadBalancerNodes))
+
+	// node becomes ready, it should be removed from az.excludeLoadBalancerNodes
+	readyNode := v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{
+				v1.LabelTopologyZone: zone,
+			},
+			Name: "aNode",
+		},
+		Status: v1.NodeStatus{
+			Conditions: []v1.NodeCondition{
+				{
+					Type:   v1.NodeReady,
+					Status: v1.ConditionTrue,
+				},
+			},
+		},
+	}
+	az.updateNodeCaches(&nonReadyNode, &readyNode)
+	assert.Equal(t, 0, len(az.excludeLoadBalancerNodes))
+
+	// new non-ready node with taint is added to the cluster: don't exclude it
+	nonReadyTaintedNode := v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: map[string]string{
+				v1.LabelTopologyZone: zone,
+			},
+			Name: "anotherNode",
+		},
+		Spec: v1.NodeSpec{
+			Taints: []v1.Taint{{
+				Key:    cloudproviderapi.TaintExternalCloudProvider,
+				Value:  "aValue",
+				Effect: v1.TaintEffectNoSchedule},
+			},
+		},
+		Status: v1.NodeStatus{
+			Conditions: []v1.NodeCondition{
+				{
+					Type:   v1.NodeReady,
+					Status: v1.ConditionFalse,
+				},
+			},
+		},
+	}
+	az.updateNodeCaches(nil, &nonReadyTaintedNode)
+	assert.Equal(t, 0, len(az.excludeLoadBalancerNodes))
 }
 
 func TestGetActiveZones(t *testing.T) {
