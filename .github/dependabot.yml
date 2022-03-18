@@ -4,38 +4,56 @@ updates:
     directory: "/"
     schedule:
       interval: daily
+      time: "01:00"
+      timezone: "Asia/Shanghai"
     labels:
+      - "area/dependency"
       - "release-note-none"
-    open-pull-requests-limit: 5
-  
+      - "ok-to-test"
+
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "daily"
+      time: "01:00"
+      timezone: "Asia/Shanghai"
+    labels:
+      - "area/dependency"
+      - "release-note-none"
+      - "ok-to-test"
   
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: daily
+      time: "01:00"
+      timezone: "Asia/Shanghai"
     labels:
+      - "area/dependency"
       - "release-note-none"
-    open-pull-requests-limit: 5
+      - "ok-to-test"
 
   - package-ecosystem: "npm"
     directory: "/site/"
     schedule:
       interval: daily
+      time: "01:00"
+      timezone: "Asia/Shanghai"
     labels:
+      - "area/dependency"
       - "release-note-none"
-    open-pull-requests-limit: 5
+      - "ok-to-test"
 
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
       interval: daily
+      time: "01:00"
+      timezone: "Asia/Shanghai"
     labels:
+      - "area/dependency"
       - "release-note-none"
-    open-pull-requests-limit: 5
+      - "ok-to-test"
     target-branch: "release-1.23"
     ignore:
       - dependency-name: "k8s.io/*"
@@ -45,9 +63,12 @@ updates:
     directory: "/"
     schedule:
       interval: daily
+      time: "01:00"
+      timezone: "Asia/Shanghai"
     labels:
+      - "area/dependency"
       - "release-note-none"
-    open-pull-requests-limit: 5
+      - "ok-to-test"
     target-branch: "release-1.1"
     ignore:
       - dependency-name: "k8s.io/*"
@@ -57,9 +78,12 @@ updates:
     directory: "/"
     schedule:
       interval: daily
+      time: "01:00"
+      timezone: "Asia/Shanghai"
     labels:
+      - "area/dependency"
       - "release-note-none"
-    open-pull-requests-limit: 5
+      - "ok-to-test"
     target-branch: "release-1.0"
     ignore:
       - dependency-name: "k8s.io/*"
@@ -69,9 +93,12 @@ updates:
     directory: "/"
     schedule:
       interval: daily
+      time: "01:00"
+      timezone: "Asia/Shanghai"
     labels:
+      - "area/dependency"
       - "release-note-none"
-    open-pull-requests-limit: 5
+      - "ok-to-test"
     target-branch: "release-0.7"
     ignore:
       - dependency-name: "k8s.io/*"

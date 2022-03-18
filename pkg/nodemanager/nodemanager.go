@@ -244,7 +244,7 @@ func (cnc *CloudNodeController) reconcileNodeLabels(node *v1.Node) error {
 // UpdateNodeAddress updates the nodeAddress of a single node
 func (cnc *CloudNodeController) updateNodeAddress(ctx context.Context, node *v1.Node) error {
 	// Do not process nodes that are still tainted
-	cloudTaint := getCloudTaint(node.Spec.Taints)
+	cloudTaint := GetCloudTaint(node.Spec.Taints)
 	if cloudTaint != nil {
 		klog.V(5).Infof("This node %s is still tainted. Will not process.", node.Name)
 		return nil
@@ -325,7 +325,7 @@ func (cnc *CloudNodeController) UpdateCloudNode(ctx context.Context, _, newObj i
 		return
 	}
 
-	cloudTaint := getCloudTaint(node.Spec.Taints)
+	cloudTaint := GetCloudTaint(node.Spec.Taints)
 	if cloudTaint == nil {
 		// The node has already been initialized so nothing to do.
 		return
@@ -343,7 +343,7 @@ func (cnc *CloudNodeController) AddCloudNode(ctx context.Context, obj interface{
 		return
 	}
 
-	cloudTaint := getCloudTaint(node.Spec.Taints)
+	cloudTaint := GetCloudTaint(node.Spec.Taints)
 	if cloudTaint == nil {
 		klog.V(2).Infof("This node %s is registered without the cloud taint. Will not process.", node.Name)
 		return
@@ -361,7 +361,7 @@ func (cnc *CloudNodeController) initializeNode(ctx context.Context, node *v1.Nod
 		return
 	}
 
-	cloudTaint := getCloudTaint(curNode.Spec.Taints)
+	cloudTaint := GetCloudTaint(curNode.Spec.Taints)
 	if cloudTaint == nil {
 		// Node object received from event had the cloud taint but was outdated,
 		// the node has actually already been initialized.
@@ -378,9 +378,16 @@ func (cnc *CloudNodeController) initializeNode(ctx context.Context, node *v1.Nod
 		}
 	}
 
-	nodeModifiers, err := cnc.getNodeModifiersFromCloudProvider(ctx, curNode)
+	var nodeModifiers []nodeModifier
+	err = clientretry.OnError(UpdateNodeSpecBackoff, func(err error) bool {
+		return err != nil && strings.HasPrefix(err.Error(), "failed to set node provider id")
+	}, func() error {
+		nodeModifiers, err = cnc.getNodeModifiersFromCloudProvider(ctx, curNode)
+		return err
+	})
 	if err != nil {
-		utilruntime.HandleError(fmt.Errorf("failed to initialize node %s at cloudprovider: %w", node.Name, err))
+		// Instead of just logging the error, panic and node manager can restart
+		utilruntime.Must(fmt.Errorf("failed to initialize node %s at cloudprovider: %w", node.Name, err))
 		return
 	}
 
@@ -435,10 +442,9 @@ func (cnc *CloudNodeController) getNodeModifiersFromCloudProvider(ctx context.Co
 				}
 			})
 		} else {
-			// we should attempt to set providerID on node, but
-			// we can continue if we fail since we will attempt to set
-			// node addresses given the node name in getNodeAddressesByName
-			klog.Errorf("failed to set node provider id: %v", err)
+			// if we are not able to get node provider id,
+			// we return error here and retry in the caller initializeNode()
+			return nil, fmt.Errorf("failed to set node provider id: %w", err)
 		}
 	}
 
@@ -513,7 +519,7 @@ func (cnc *CloudNodeController) getNodeModifiersFromCloudProvider(ctx context.Co
 	return nodeModifiers, nil
 }
 
-func getCloudTaint(taints []v1.Taint) *v1.Taint {
+func GetCloudTaint(taints []v1.Taint) *v1.Taint {
 	for _, taint := range taints {
 		if taint.Key == cloudproviderapi.TaintExternalCloudProvider {
 			return &taint
