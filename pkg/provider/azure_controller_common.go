@@ -141,7 +141,7 @@ func (c *controllerCommon) getNodeVMSet(nodeName types.NodeName, crt azcache.Azu
 
 // AttachDisk attaches a disk to vm
 // return (lun, error)
-func (c *controllerCommon) AttachDisk(ctx context.Context, ignored bool, diskName, diskURI string, nodeName types.NodeName,
+func (c *controllerCommon) AttachDisk(ctx context.Context, async bool, diskName, diskURI string, nodeName types.NodeName,
 	cachingMode compute.CachingTypes, disk *compute.Disk) (int32, error) {
 	diskEncryptionSetID := ""
 	writeAcceleratorEnabled := false
@@ -212,6 +212,7 @@ func (c *controllerCommon) AttachDisk(ctx context.Context, ignored bool, diskNam
 	diskToAttach := attachDiskParams{
 		diskURI: diskURI,
 		options: options,
+		async:   async,
 	}
 
 	resourceGroup, err := c.cloud.GetNodeResourceGroup(string(nodeName))
@@ -239,6 +240,7 @@ func (c *controllerCommon) AttachDisk(ctx context.Context, ignored bool, diskNam
 type attachDiskParams struct {
 	diskURI string
 	options *AttachDiskOptions
+	async   bool
 }
 
 type attachDiskResult struct {
@@ -249,6 +251,7 @@ type attachDiskResult struct {
 func (c *controllerCommon) attachDiskBatchToNode(ctx context.Context, subscriptionID, resourceGroup string, nodeName types.NodeName, disksToAttach []attachDiskParams) ([]chan (attachDiskResult), error) {
 	diskMap := make(map[string]*AttachDiskOptions, len(disksToAttach))
 	lunChans := make([]chan (attachDiskResult), len(disksToAttach))
+	async := false
 
 	for i, disk := range disksToAttach {
 		lunChans[i] = make(chan (attachDiskResult), 1)
@@ -258,6 +261,8 @@ func (c *controllerCommon) attachDiskBatchToNode(ctx context.Context, subscripti
 		diskURI := strings.ToLower(disk.diskURI)
 		c.diskStateMap.Store(diskURI, "attaching")
 		defer c.diskStateMap.Delete(diskURI)
+
+		async = async || disk.async
 	}
 
 	_, err := c.cloud.SetDiskLun(nodeName, disksToAttach[0].diskURI, diskMap)
@@ -280,17 +285,21 @@ func (c *controllerCommon) attachDiskBatchToNode(ctx context.Context, subscripti
 		return nil, err
 	}
 
-	go func() {
-		// The context, ctx, passed to attachDiskBatchToNode is owned by batch.Processor which will
-		// cancel it when we return. Since we're asynchronously waiting for the attach disk result,
-		// we must create an independent context passed to WaitForUpdateResult with the deadline
-		// provided in ctx. This avoid an earlier return due to ctx being canceled while still
-		// respecting the deadline for the overall attach operation.
-		resultCtx := context.Background()
-		if deadline, ok := ctx.Deadline(); ok {
-			var cancel func()
-			resultCtx, cancel = context.WithDeadline(resultCtx, deadline)
-			defer cancel()
+	attachFn := func() {
+		resultCtx := ctx
+
+		if async {
+			// The context, ctx, passed to attachDiskBatchToNode is owned by batch.Processor which will
+			// cancel it when we return. Since we're asynchronously waiting for the attach disk result,
+			// we must create an independent context passed to WaitForUpdateResult with the deadline
+			// provided in ctx. This avoids an earlier return due to ctx being canceled while still
+			// respecting the deadline for the overall attach operation.
+			resultCtx = context.Background()
+			if deadline, ok := ctx.Deadline(); ok {
+				var cancel func()
+				resultCtx, cancel = context.WithDeadline(resultCtx, deadline)
+				defer cancel()
+			}
 		}
 
 		err = vmset.WaitForUpdateResult(resultCtx, future, resourceGroup, "attach_disk")
@@ -301,7 +310,13 @@ func (c *controllerCommon) attachDiskBatchToNode(ctx context.Context, subscripti
 		for i, disk := range disksToAttach {
 			lunChans[i] <- attachDiskResult{lun: diskMap[disk.diskURI].lun, err: err}
 		}
-	}()
+	}
+
+	if async {
+		go attachFn()
+	} else {
+		attachFn()
+	}
 
 	return lunChans, nil
 }
