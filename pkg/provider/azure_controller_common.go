@@ -451,11 +451,11 @@ func (c *controllerCommon) SetDiskLun(nodeName types.NodeName, disksPendingAttac
 		return err
 	}
 
-	usedLuns := make([]bool, maxLUN)
+	allLuns := make([]bool, maxLUN)
 	uriToLun := make(map[string]int32, len(disks))
 	for _, disk := range disks {
 		if disk.Lun != nil {
-			usedLuns[*disk.Lun] = true
+			allLuns[*disk.Lun] = true
 			if disk.ManagedDisk != nil {
 				uriToLun[*disk.ManagedDisk.ID] = *disk.Lun
 			}
@@ -469,7 +469,7 @@ func (c *controllerCommon) SetDiskLun(nodeName types.NodeName, disksPendingAttac
 	// allocate lun for every disk in disksPendingAttach
 	var availableDiskLuns []int32
 	freeLunsCount := 0
-	for lun, inUse := range usedLuns {
+	for lun, inUse := range allLuns {
 		if !inUse {
 			availableDiskLuns = append(availableDiskLuns, int32(lun))
 			freeLunsCount++
