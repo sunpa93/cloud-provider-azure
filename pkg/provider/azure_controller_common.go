@@ -454,7 +454,7 @@ func (c *controllerCommon) SetDiskLun(nodeName types.NodeName, disksPendingAttac
 	allLuns := make([]bool, maxLUN)
 	uriToLun := make(map[string]int32, len(disks))
 	for _, disk := range disks {
-		if disk.Lun != nil {
+		if disk.Lun != nil && *disk.Lun >= 0 && *disk.Lun < maxLUN {
 			allLuns[*disk.Lun] = true
 			if disk.ManagedDisk != nil {
 				uriToLun[*disk.ManagedDisk.ID] = *disk.Lun
