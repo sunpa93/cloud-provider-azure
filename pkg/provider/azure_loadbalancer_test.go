@@ -33,6 +33,8 @@ import (
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -242,6 +244,42 @@ func TestFindRule(t *testing.T) {
 				Name: to.StringPtr("probe2"),
 				LoadBalancingRulePropertiesFormat: &network.LoadBalancingRulePropertiesFormat{
 					LoadDistribution: network.LoadDistributionSourceIP,
+				},
+			},
+			expected: false,
+		},
+		{
+			msg: "rule and probe names match should return true",
+			existingRule: []network.LoadBalancingRule{
+				{
+					Name: to.StringPtr("probe1"),
+					LoadBalancingRulePropertiesFormat: &network.LoadBalancingRulePropertiesFormat{
+						Probe: &network.SubResource{ID: to.StringPtr("probe")},
+					},
+				},
+			},
+			curRule: network.LoadBalancingRule{
+				Name: to.StringPtr("probe1"),
+				LoadBalancingRulePropertiesFormat: &network.LoadBalancingRulePropertiesFormat{
+					Probe: &network.SubResource{ID: to.StringPtr("probe")},
+				},
+			},
+			expected: true,
+		},
+		{
+			msg: "rule names match while probe don't should return false",
+			existingRule: []network.LoadBalancingRule{
+				{
+					Name: to.StringPtr("probe1"),
+					LoadBalancingRulePropertiesFormat: &network.LoadBalancingRulePropertiesFormat{
+						Probe: nil,
+					},
+				},
+			},
+			curRule: network.LoadBalancingRule{
+				Name: to.StringPtr("probe1"),
+				LoadBalancingRulePropertiesFormat: &network.LoadBalancingRulePropertiesFormat{
+					Probe: &network.SubResource{ID: to.StringPtr("probe")},
 				},
 			},
 			expected: false,
@@ -1319,6 +1357,37 @@ func TestGetServiceLoadBalancer(t *testing.T) {
 			expectedExists: false,
 			expectedError:  false,
 		},
+		{
+			desc:    "getServiceLoadBalancer should create a new lb and return the status of the previous lb",
+			sku:     "Basic",
+			wantLB:  true,
+			service: getTestService("service1", v1.ProtocolTCP, map[string]string{consts.ServiceAnnotationLoadBalancerMode: "as", consts.ServiceAnnotationLoadBalancerInternal: consts.TrueAnnotationValue}, false, 80),
+			existingLBs: []network.LoadBalancer{
+				{
+					Name:     to.StringPtr("as-internal"),
+					Location: to.StringPtr("westus"),
+					LoadBalancerPropertiesFormat: &network.LoadBalancerPropertiesFormat{
+						FrontendIPConfigurations: &[]network.FrontendIPConfiguration{
+							{
+								Name: to.StringPtr("aservice1"),
+								FrontendIPConfigurationPropertiesFormat: &network.FrontendIPConfigurationPropertiesFormat{
+									PrivateIPAddress: to.StringPtr("1.2.3.4"),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedLB: &network.LoadBalancer{
+				Name:     to.StringPtr("testCluster-internal"),
+				Location: to.StringPtr("westus"),
+				Sku: &network.LoadBalancerSku{
+					Name: network.LoadBalancerSkuNameBasic,
+				},
+				LoadBalancerPropertiesFormat: &network.LoadBalancerPropertiesFormat{},
+			},
+			expectedStatus: &v1.LoadBalancerStatus{Ingress: []v1.LoadBalancerIngress{{IP: "1.2.3.4", Hostname: ""}}},
+		},
 	}
 
 	ctrl := gomock.NewController(t)
@@ -1331,6 +1400,7 @@ func TestGetServiceLoadBalancer(t *testing.T) {
 		mockLBsClient := mockloadbalancerclient.NewMockInterface(ctrl)
 		mockLBsClient.EXPECT().CreateOrUpdate(gomock.Any(), "rg", gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		mockLBsClient.EXPECT().List(gomock.Any(), "rg").Return(test.existingLBs, nil)
+		mockLBsClient.EXPECT().Delete(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		az.LoadBalancerClient = mockLBsClient
 
 		for _, existingLB := range test.existingLBs {
@@ -1339,7 +1409,9 @@ func TestGetServiceLoadBalancer(t *testing.T) {
 				t.Fatalf("TestCase[%d] meets unexpected error: %v", i, err)
 			}
 		}
-		test.service.Annotations = test.annotations
+		if test.annotations != nil {
+			test.service.Annotations = test.annotations
+		}
 		az.LoadBalancerSku = test.sku
 		lb, status, exists, err := az.getServiceLoadBalancer(&test.service, testClusterName,
 			clusterResources.nodes, test.wantLB, []network.LoadBalancer{})
@@ -1707,11 +1779,20 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 			expectedRules:   getDefaultTestRules(false),
 		},
 		{
-			desc:            "getExpectedLBRules shall return error on non supported protocols",
+			desc:            "getExpectedLBRules shall return tcp probe on non supported protocols when basic slb sku is used",
+			service:         getTestService("test1", v1.ProtocolTCP, map[string]string{}, false, 80),
+			loadBalancerSku: "basic",
+			probeProtocol:   "Mongodb",
+			expectedRules:   getDefaultTestRules(false),
+			expectedProbes:  getDefaultTestProbes("Tcp", ""),
+		},
+		{
+			desc:            "getExpectedLBRules shall return tcp probe on https protocols when basic slb sku is used",
 			service:         getTestService("test1", v1.ProtocolTCP, map[string]string{}, false, 80),
 			loadBalancerSku: "basic",
 			probeProtocol:   "Https",
-			expectedErr:     true,
+			expectedRules:   getDefaultTestRules(false),
+			expectedProbes:  getDefaultTestProbes("Tcp", ""),
 		},
 		{
 			desc:            "getExpectedLBRules shall return error (slb with external mode and SCTP)",
@@ -1782,13 +1863,24 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 			expectedRules:   getDefaultTestRules(true),
 		},
 		{
-			desc: "getExpectedLBRules should return error when invalid protocol is defined",
+			desc: "getExpectedLBRules should return tcp probe when invalid protocol is defined",
 			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
 				"service.beta.kubernetes.io/port_80_health-probe_request-path": "/healthy1",
 			}, false, 80),
 			loadBalancerSku: "standard",
 			probeProtocol:   "TCP1",
-			expectedErr:     true,
+			expectedProbes:  getDefaultTestProbes("Tcp", ""),
+			expectedRules:   getDefaultTestRules(true),
+		},
+		{
+			desc: "getExpectedLBRules should return tcp probe when invalid protocol is defined",
+			service: getTestService("test1", v1.ProtocolTCP, map[string]string{
+				"service.beta.kubernetes.io/port_80_health-probe_request-path": "/healthy1",
+			}, false, 80),
+			loadBalancerSku: "basic",
+			probeProtocol:   "TCP1",
+			expectedProbes:  getDefaultTestProbes("Tcp", ""),
+			expectedRules:   getDefaultTestRules(false),
 		},
 		{
 			desc: "getExpectedLBRules should return correct rule when deprecated annotations are added",
@@ -1882,7 +1974,7 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 			}, false, 80),
 			loadBalancerSku: "standard",
 			probeProtocol:   "Http",
-			expectedProbes:  getTestProbes("Http", "/healthz", to.Int32Ptr(20), to.Int32Ptr(10080), to.Int32Ptr(5)),
+			expectedProbes:  getTestProbes("Http", "/", to.Int32Ptr(20), to.Int32Ptr(10080), to.Int32Ptr(5)),
 			expectedRules:   getDefaultTestRules(true),
 		},
 		{
@@ -1960,7 +2052,39 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 		expectedProbes:  getTestProbes("Tcp", "", to.Int32Ptr(10), to.Int32Ptr(10080), to.Int32Ptr(10)),
 		expectedRules:   rules,
 	})
-
+	rules1 := []network.LoadBalancingRule{
+		getTestRule(true, 80),
+		getTestRule(true, 443),
+		getTestRule(true, 421),
+	}
+	rules1[0].Probe.ID = to.StringPtr("/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lbname/probes/atest1-TCP-34567")
+	rules1[1].Probe.ID = to.StringPtr("/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lbname/probes/atest1-TCP-34567")
+	rules1[2].Probe.ID = to.StringPtr("/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lbname/probes/atest1-TCP-34567")
+	svc := getTestService("test1", v1.ProtocolTCP, map[string]string{
+		"service.beta.kubernetes.io/port_80_health-probe_interval":     "10",
+		"service.beta.kubernetes.io/port_80_health-probe_num-of-probe": "10",
+	}, false, 80, 443, 421)
+	svc.Spec.ExternalTrafficPolicy = v1.ServiceExternalTrafficPolicyTypeLocal
+	svc.Spec.HealthCheckNodePort = 34567
+	probes := getTestProbes("Http", "/healthz", to.Int32Ptr(5), to.Int32Ptr(34567), to.Int32Ptr(2))
+	probes[0].Name = to.StringPtr("atest1-TCP-34567")
+	testCases = append(testCases, struct {
+		desc            string
+		service         v1.Service
+		loadBalancerSku string
+		probeProtocol   string
+		probePath       string
+		expectedProbes  []network.Probe
+		expectedRules   []network.LoadBalancingRule
+		expectedErr     bool
+	}{
+		desc:            "getExpectedLBRules should expected rules when externaltrafficpolicy is local",
+		service:         svc,
+		loadBalancerSku: "standard",
+		probeProtocol:   "Http",
+		expectedProbes:  probes,
+		expectedRules:   rules1,
+	})
 	for i, test := range testCases {
 		az := GetTestCloud(ctrl)
 		az.Config.LoadBalancerSku = test.loadBalancerSku
@@ -1985,54 +2109,61 @@ func TestReconcileLoadBalancerRule(t *testing.T) {
 	}
 }
 func getTestProbes(protocol, path string, interval, port, numOfProbe *int32) []network.Probe {
-	expectedProbes := []network.Probe{
-		{
-			Name: to.StringPtr("atest1-TCP-80"),
-			ProbePropertiesFormat: &network.ProbePropertiesFormat{
-				Protocol:          network.ProbeProtocol(protocol),
-				Port:              port,
-				IntervalInSeconds: interval,
-				NumberOfProbes:    numOfProbe,
-			},
+	return []network.Probe{
+		getTestProbe(protocol, path, interval, port, numOfProbe),
+	}
+}
+
+func getTestProbe(protocol, path string, interval, port, numOfProbe *int32) network.Probe {
+	expectedProbes := network.Probe{
+		Name: to.StringPtr(fmt.Sprintf("atest1-TCP-%d", *port-10000)),
+		ProbePropertiesFormat: &network.ProbePropertiesFormat{
+			Protocol:          network.ProbeProtocol(protocol),
+			Port:              port,
+			IntervalInSeconds: interval,
+			NumberOfProbes:    numOfProbe,
 		},
 	}
 	if (strings.EqualFold(protocol, "Http") || strings.EqualFold(protocol, "Https")) && len(strings.TrimSpace(path)) > 0 {
-		expectedProbes[0].RequestPath = to.StringPtr(path)
+		expectedProbes.RequestPath = to.StringPtr(path)
 	}
 	return expectedProbes
 }
-
 func getDefaultTestProbes(protocol, path string) []network.Probe {
 	return getTestProbes(protocol, path, to.Int32Ptr(5), to.Int32Ptr(10080), to.Int32Ptr(2))
 }
 
 func getDefaultTestRules(enableTCPReset bool) []network.LoadBalancingRule {
-	expectedRules := []network.LoadBalancingRule{
-		{
-			Name: to.StringPtr("atest1-TCP-80"),
-			LoadBalancingRulePropertiesFormat: &network.LoadBalancingRulePropertiesFormat{
-				Protocol: network.TransportProtocol("Tcp"),
-				FrontendIPConfiguration: &network.SubResource{
-					ID: to.StringPtr("frontendIPConfigID"),
-				},
-				BackendAddressPool: &network.SubResource{
-					ID: to.StringPtr("backendPoolID"),
-				},
-				LoadDistribution:     "Default",
-				FrontendPort:         to.Int32Ptr(80),
-				BackendPort:          to.Int32Ptr(80),
-				EnableFloatingIP:     to.BoolPtr(true),
-				DisableOutboundSnat:  to.BoolPtr(false),
-				IdleTimeoutInMinutes: to.Int32Ptr(4),
-				Probe: &network.SubResource{
-					ID: to.StringPtr("/subscriptions/subscription/resourceGroups/rg/providers/" +
-						"Microsoft.Network/loadBalancers/lbname/probes/atest1-TCP-80"),
-				},
+	return []network.LoadBalancingRule{
+		getTestRule(enableTCPReset, 80),
+	}
+}
+
+func getTestRule(enableTCPReset bool, port int32) network.LoadBalancingRule {
+	expectedRules := network.LoadBalancingRule{
+		Name: to.StringPtr(fmt.Sprintf("atest1-TCP-%d", port)),
+		LoadBalancingRulePropertiesFormat: &network.LoadBalancingRulePropertiesFormat{
+			Protocol: network.TransportProtocol("Tcp"),
+			FrontendIPConfiguration: &network.SubResource{
+				ID: to.StringPtr("frontendIPConfigID"),
+			},
+			BackendAddressPool: &network.SubResource{
+				ID: to.StringPtr("backendPoolID"),
+			},
+			LoadDistribution:     "Default",
+			FrontendPort:         to.Int32Ptr(port),
+			BackendPort:          to.Int32Ptr(port),
+			EnableFloatingIP:     to.BoolPtr(true),
+			DisableOutboundSnat:  to.BoolPtr(false),
+			IdleTimeoutInMinutes: to.Int32Ptr(4),
+			Probe: &network.SubResource{
+				ID: to.StringPtr("/subscriptions/subscription/resourceGroups/rg/providers/" +
+					fmt.Sprintf("Microsoft.Network/loadBalancers/lbname/probes/atest1-TCP-%d", port)),
 			},
 		},
 	}
 	if enableTCPReset {
-		expectedRules[0].EnableTCPReset = to.BoolPtr(true)
+		expectedRules.EnableTCPReset = to.BoolPtr(true)
 	}
 	return expectedRules
 }
@@ -2069,6 +2200,7 @@ func getHATestRules(enableTCPReset, hasProbe bool, protocol v1.Protocol) []netwo
 }
 
 func getTestLoadBalancer(name, rgName, clusterName, identifier *string, service v1.Service, lbSku string) network.LoadBalancer {
+	caser := cases.Title(language.English)
 	lb := network.LoadBalancer{
 		Name: name,
 		Sku: &network.LoadBalancerSku{
@@ -2101,8 +2233,7 @@ func getTestLoadBalancer(name, rgName, clusterName, identifier *string, service 
 					Name: to.StringPtr(*identifier + "-" + string(service.Spec.Ports[0].Protocol) +
 						"-" + strconv.Itoa(int(service.Spec.Ports[0].Port))),
 					LoadBalancingRulePropertiesFormat: &network.LoadBalancingRulePropertiesFormat{
-						Protocol: network.TransportProtocol(strings.Title(
-							strings.ToLower(string(service.Spec.Ports[0].Protocol)))),
+						Protocol: network.TransportProtocol(caser.String((strings.ToLower(string(service.Spec.Ports[0].Protocol))))),
 						FrontendIPConfiguration: &network.SubResource{
 							ID: to.StringPtr("/subscriptions/subscription/resourceGroups/" + *rgName + "/providers/" +
 								"Microsoft.Network/loadBalancers/" + *name + "/frontendIPConfigurations/aservice1"),
@@ -2321,7 +2452,8 @@ func TestReconcileLoadBalancer(t *testing.T) {
 	lb6.Probes = &[]network.Probe{}
 	expectedLB6 := getTestLoadBalancer(to.StringPtr("testCluster"), to.StringPtr("rg"), to.StringPtr("testCluster"), to.StringPtr("aservice1"), service6, "basic")
 	expectedLB6.Probes = &[]network.Probe{}
-	(*expectedLB6.LoadBalancerPropertiesFormat.LoadBalancingRules)[0].Probe = &network.SubResource{ID: to.StringPtr("/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/testCluster/probes/aservice1-TCP-80")}
+	(*expectedLB6.LoadBalancerPropertiesFormat.LoadBalancingRules)[0].Probe = nil
+	(*expectedLB6.LoadBalancerPropertiesFormat.LoadBalancingRules)[0].EnableTCPReset = nil
 	expectedLB6.FrontendIPConfigurations = &[]network.FrontendIPConfiguration{
 		{
 			Name: to.StringPtr("aservice1"),
@@ -4408,6 +4540,18 @@ func TestShouldChangeLoadBalancer(t *testing.T) {
 		res := cloud.shouldChangeLoadBalancer(&service, "testCluster-internal", "testCluster")
 		assert.False(t, res)
 	})
+
+	t.Run("shouldChangeLoadBalancer should return true if the mode is the same as the current LB but the vmSet is the primary one", func(t *testing.T) {
+		cloud.LoadBalancerSku = consts.LoadBalancerSkuStandard
+		cloud.EnableMultipleStandardLoadBalancers = true
+		cloud.PrimaryAvailabilitySetName = "vmss-1"
+		annotations := map[string]string{
+			consts.ServiceAnnotationLoadBalancerMode: "vmss-1",
+		}
+		service := getTestService("service1", v1.ProtocolTCP, annotations, false, 80)
+		res := cloud.shouldChangeLoadBalancer(&service, "vmss-1", "testCluster")
+		assert.True(t, res)
+	})
 }
 
 func TestRemoveFrontendIPConfigurationFromLoadBalancerDelete(t *testing.T) {
@@ -4509,11 +4653,13 @@ func TestReconcileZonesForFrontendIPConfigs(t *testing.T) {
 		service                   v1.Service
 		existingFrontendIPConfigs []network.FrontendIPConfiguration
 		existingPIP               network.PublicIPAddress
+		status                    *v1.LoadBalancerStatus
 		getPIPError               *retry.Error
 		getZoneError              *retry.Error
 		regionZonesMap            map[string][]string
 		expectedZones             *[]string
 		expectedDirty             bool
+		expectedIP                string
 		expectedErr               error
 	}{
 		{
@@ -4565,6 +4711,15 @@ func TestReconcileZonesForFrontendIPConfigs(t *testing.T) {
 				consts.ServiceAnnotationLoadBalancerInternal:       consts.TrueAnnotationValue}, 80),
 			existingFrontendIPConfigs: []network.FrontendIPConfiguration{
 				{
+					Name: to.StringPtr("not-this-one"),
+					FrontendIPConfigurationPropertiesFormat: &network.FrontendIPConfigurationPropertiesFormat{
+						Subnet: &network.Subnet{
+							Name: to.StringPtr("subnet-1"),
+						},
+					},
+					Zones: &[]string{"2"},
+				},
+				{
 					Name: to.StringPtr("atest1"),
 					FrontendIPConfigurationPropertiesFormat: &network.FrontendIPConfigurationPropertiesFormat{
 						Subnet: &network.Subnet{
@@ -4575,6 +4730,17 @@ func TestReconcileZonesForFrontendIPConfigs(t *testing.T) {
 				},
 			},
 			expectedZones: &[]string{"1"},
+			expectedDirty: true,
+		},
+		{
+			description: "reconcileFrontendIPConfigs should reuse the existing private IP for internal services",
+			service:     getInternalTestService("test", 80),
+			status: &v1.LoadBalancerStatus{
+				Ingress: []v1.LoadBalancerIngress{
+					{IP: "1.2.3.4"},
+				},
+			},
+			expectedIP:    "1.2.3.4",
 			expectedDirty: true,
 		},
 	} {
@@ -4599,7 +4765,7 @@ func TestReconcileZonesForFrontendIPConfigs(t *testing.T) {
 			cloud.ZoneClient = zoneClient
 
 			defaultLBFrontendIPConfigName := cloud.getDefaultFrontendIPConfigName(&tc.service)
-			_, dirty, err := cloud.reconcileFrontendIPConfigs("testCluster", &tc.service, &lb, true, defaultLBFrontendIPConfigName)
+			_, dirty, err := cloud.reconcileFrontendIPConfigs("testCluster", &tc.service, &lb, tc.status, true, defaultLBFrontendIPConfigName)
 			if tc.expectedErr == nil {
 				assert.NoError(t, err)
 			} else {
@@ -4611,6 +4777,11 @@ func TestReconcileZonesForFrontendIPConfigs(t *testing.T) {
 				if strings.EqualFold(to.String(fip.Name), defaultLBFrontendIPConfigName) {
 					assert.Equal(t, tc.expectedZones, fip.Zones)
 				}
+			}
+
+			if tc.expectedIP != "" {
+				assert.Equal(t, network.IPAllocationMethodStatic, (*lb.FrontendIPConfigurations)[0].PrivateIPAllocationMethod)
+				assert.Equal(t, tc.expectedIP, to.String((*lb.FrontendIPConfigurations)[0].PrivateIPAddress))
 			}
 		})
 	}

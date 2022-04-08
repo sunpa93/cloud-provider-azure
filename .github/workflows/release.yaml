@@ -155,7 +155,7 @@ jobs:
       - name: Setup Golang
         uses: actions/setup-go@v2
         with:
-          go-version: '1.17'
+          go-version: ^1.18
       - name: Generate release note
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -193,6 +193,7 @@ jobs:
           	--start-sha=${START_SHA} \
           	--end-sha=${END_SHA} \
           	--markdown-links=true \
+          	--required-author='' \
           	--output=release-notes.md
           
           # Generate release note for site
@@ -214,7 +215,7 @@ jobs:
             ./artifacts/cloud-controller-manager-*-*/*
             ./artifacts/acr-credential-provider-*-*/*
       - name: Update site release note
-        uses: peter-evans/create-pull-request@v3
+        uses: peter-evans/create-pull-request@v4
         with:
           branch: doc/release-note-${{github.ref_name}}
           delete-branch: true
