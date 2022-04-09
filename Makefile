@@ -70,11 +70,14 @@ DOCKER_BUILDX ?= docker buildx
 
 # cloud controller manager image
 ifeq ($(ARCH), amd64)
-IMAGE_NAME=azure-cloud-controller-manager
+CONTROLLER_MANAGER_IMAGE_NAME=azure-cloud-controller-manager
 else
-IMAGE_NAME=azure-cloud-controller-manager-$(ARCH)
+CONTROLLER_MANAGER_IMAGE_NAME=azure-cloud-controller-manager-$(ARCH)
 endif
-IMAGE=$(IMAGE_REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
+CONTROLLER_MANAGER_FULL_IMAGE_NAME=$(IMAGE_REGISTRY)/$(CONTROLLER_MANAGER_IMAGE_NAME)
+CONTROLLER_MANAGER_IMAGE=$(IMAGE_REGISTRY)/$(CONTROLLER_MANAGER_IMAGE_NAME):$(IMAGE_TAG)
+ALL_CONTROLLER_MANAGER_IMAGES = $(foreach arch, ${ALL_ARCH.linux}, $(CONTROLLER_MANAGER_FULL_IMAGE_NAME)-${arch}:$(IMAGE_TAG))
+
 # cloud node manager image
 NODE_MANAGER_IMAGE_NAME=azure-cloud-node-manager
 NODE_MANAGER_FULL_IMAGE_NAME=$(IMAGE_REGISTRY)/$(NODE_MANAGER_IMAGE_NAME)
@@ -88,6 +91,8 @@ CCM_E2E_TEST_IMAGE_NAME=cloud-provider-azure-e2e
 CCM_E2E_TEST_IMAGE=$(IMAGE_REGISTRY)/$(CCM_E2E_TEST_IMAGE_NAME):$(IMAGE_TAG)
 CCM_E2E_TEST_RELEASE_IMAGE=docker.pkg.github.com/kubernetes-sigs/cloud-provider-azure/cloud-provider-azure-e2e:$(IMAGE_TAG)
 
+# cloud build variables
+CLOUD_BUILD_IMAGE ?= ccm
 
 ##@ General
 
@@ -123,7 +128,7 @@ $(BIN_DIR)/azure-acr-credential-provider.exe: $(PKG_CONFIG) $(wildcard cmd/acr-c
 .PHONY: docker-pull-prerequisites
 docker-pull-prerequisites: ## Pull prerequisite images.
 	docker pull docker/dockerfile:1.3.1
-	docker pull docker.io/library/golang:1.17-buster
+	docker pull docker.io/library/golang:1.18-buster
 	docker pull gcr.io/distroless/static:latest
 
 buildx-setup:
@@ -143,7 +148,7 @@ build-ccm-image: buildx-setup docker-pull-prerequisites ## Build controller-mana
 		--build-arg ARCH="$(ARCH)" \
 		--build-arg VERSION="$(VERSION)" \
 		--file Dockerfile \
-		--tag $(IMAGE) .
+		--tag $(CONTROLLER_MANAGER_IMAGE) .
 
 .PHONY: build-node-image-linux
 build-node-image-linux: buildx-setup docker-pull-prerequisites ## Build node-manager image.
@@ -172,12 +177,20 @@ build-ccm-e2e-test-image: ## Build e2e test image.
 	docker build -t $(CCM_E2E_TEST_IMAGE) -f ./e2e.Dockerfile .
 
 .PHONY: push-ccm-image
-push-ccm-image: build-ccm-image ## Push controller-manager image.
-	docker push $(IMAGE)
+push-ccm-image: ## Push controller-manager image.
+	docker push $(CONTROLLER_MANAGER_IMAGE)
 
 .PHONY: push-node-image-linux
 push-node-image-linux: ## Push node-manager image for Linux.
 	docker push $(NODE_MANAGER_LINUX_FULL_IMAGE_PREFIX)-$(ARCH)
+
+push-node-image-linux-push-name-%:
+	$(MAKE) ARCH=$* push-node-image-linux-push-name
+
+.PHONY: push-node-image-linux-push-name
+ push-node-image-linux-push-name:
+	docker tag $(NODE_MANAGER_LINUX_FULL_IMAGE_PREFIX)-$(ARCH) $(NODE_MANAGER_IMAGE)
+	docker push $(NODE_MANAGER_IMAGE)
 
 .PHONY: release-ccm-e2e-test-image
 release-ccm-e2e-test-image: ## Build and release e2e test image.
@@ -206,7 +219,19 @@ push-images: push
 image: build-all-ccm-images build-all-node-images ## Build all images.
 
 .PHONY: push
-push: push-all-ccm-images push-multi-arch-node-manager-image ## Push all images.
+push: push-multi-arch-controller-manager-image push-multi-arch-node-manager-image ## Push all images.
+
+.PHONY: push-multi-arch-controller-manager-image ## Push multi-arch controller-manager image
+push-multi-arch-controller-manager-image: push-all-ccm-images ## Create and push a manifest list containing all the Linux ccm images.
+	## Linux amd64 ccm image name has no amd64
+	docker tag $(CONTROLLER_MANAGER_FULL_IMAGE_NAME):$(IMAGE_TAG) $(CONTROLLER_MANAGER_FULL_IMAGE_NAME)-amd64:$(IMAGE_TAG)
+	docker push $(CONTROLLER_MANAGER_FULL_IMAGE_NAME)-amd64:$(IMAGE_TAG)
+
+	docker manifest create --amend $(CONTROLLER_MANAGER_IMAGE) $(ALL_CONTROLLER_MANAGER_IMAGES)
+	for arch in $(ALL_ARCH.linux); do \
+		docker manifest annotate --os linux --arch $${arch} $(CONTROLLER_MANAGER_IMAGE) $(CONTROLLER_MANAGER_FULL_IMAGE_NAME)-$${arch}:$(IMAGE_TAG); \
+	done
+	docker manifest push --purge $(CONTROLLER_MANAGER_IMAGE)
 
 .PHONY: push-multi-arch-node-manager-image ## Push multi-arch node-manager image
 push-multi-arch-node-manager-image: push-all-node-images ## Create and push a manifest list containing all the Windows and Linux images.
@@ -270,6 +295,16 @@ push-all-ccm-images: $(addprefix push-ccm-image-,$(ALL_ARCH.linux))
 push-ccm-image-%:
 	$(MAKE) ARCH=$* push-ccm-image
 
+manifest-node-manager-image-windows-%:
+	$(MAKE) WINDOWS_OSVERSION=$(call word-hyphen,$*,1) ARCH=$(call word-hyphen,$*,2) manifest-node-manager-image-windows
+
+.PHONY: manifest-node-manager-image-windows
+manifest-node-manager-image-windows:
+	set -x
+	docker manifest create $(NODE_MANAGER_IMAGE) --amend $(NODE_MANAGER_LINUX_FULL_IMAGE_PREFIX)-$(ARCH) --amend $(NODE_MANAGER_WINDOWS_FULL_IMAGE_PREFIX)-$(WINDOWS_OSVERSION)-$(ARCH)
+	docker manifest annotate --os linux --arch $(ARCH) $(NODE_MANAGER_IMAGE) $(NODE_MANAGER_LINUX_FULL_IMAGE_PREFIX)-$(ARCH)
+	docker manifest annotate --os windows --arch $(ARCH) --os-version $(WINDOWS_OSVERSION) $(NODE_MANAGER_IMAGE) $(NODE_MANAGER_WINDOWS_FULL_IMAGE_PREFIX)-$(WINDOWS_OSVERSION)-$(ARCH)
+	docker manifest push --purge $(NODE_MANAGER_IMAGE)
 
 ## --------------------------------------
 ##@ Tests
@@ -284,15 +319,7 @@ ifdef JUNIT
 endif
 
 .PHONY: test-check
-test-check: test-lint test-boilerplate test-spelling test-gofmt test-govet ## Run all static checks.
-
-.PHONY: test-gofmt
-test-gofmt: ## Run gofmt test.
-	hack/verify-gofmt.sh
-
-.PHONY: test-govet
-test-govet: ## Run govet test.
-	hack/verify-govet.sh
+test-check: test-lint test-boilerplate test-helm ## Run all static checks.
 
 .PHONY: test-lint
 test-lint: ## Run golint test.
@@ -302,9 +329,9 @@ test-lint: ## Run golint test.
 test-boilerplate: ## Run boilerplate test.
 	hack/verify-boilerplate.sh
 
-.PHONY: test-spelling
-test-spelling: ## Run spelling test.
-	hack/verify-spelling.sh
+.PHONY: test-helm
+test-helm: ## Validate helm charts
+	hack/verify-helm-repo.sh
 
 .PHONY: update-dependencies
 update-dependencies: ## Update dependencies and go modules.
@@ -343,12 +370,19 @@ $(PKG_CONFIG):
 
 .PHONY: deploy
 deploy: image push ## Build, push and deploy an aks-engine cluster.
-	IMAGE=$(IMAGE) HYPERKUBE_IMAGE=$(HYPERKUBE_IMAGE) hack/deploy-cluster.sh
+	CCM_IMAGE=$(CONTROLLER_MANAGER_IMAGE) CNM_IMAGE=$(NODE_MANAGER_IMAGE) HYPERKUBE_IMAGE=$(HYPERKUBE_IMAGE) hack/deploy-cluster.sh
+
+.PHONY: cloud-build-prerequisites
+cloud-build-prerequisites:
+	apk add --no-cache jq
 
 .PHONY: release-staging
 release-staging: ## Release the cloud provider images.
-	ENABLE_GIT_COMMAND=$(ENABLE_GIT_COMMAND) $(MAKE) image push
-
+ifeq ($(CLOUD_BUILD_IMAGE),ccm)
+	ENABLE_GIT_COMMAND=$(ENABLE_GIT_COMMAND) $(MAKE) build-all-ccm-images push-multi-arch-controller-manager-image
+else
+	ENABLE_GIT_COMMAND=$(ENABLE_GIT_COMMAND) $(MAKE) cloud-build-prerequisites build-all-node-images push-multi-arch-node-manager-image
+endif
 ## --------------------------------------
 ##@ Deploy clusters
 ## --------------------------------------
