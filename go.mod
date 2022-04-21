@@ -3,8 +3,8 @@ module sigs.k8s.io/cloud-provider-azure
 go 1.17
 
 require (
-	github.com/Azure/azure-sdk-for-go v63.1.0+incompatible
-	github.com/Azure/go-autorest/autorest v0.11.25
+	github.com/Azure/azure-sdk-for-go v63.3.0+incompatible
+	github.com/Azure/go-autorest/autorest v0.11.26
 	github.com/Azure/go-autorest/autorest/adal v0.9.18
 	github.com/Azure/go-autorest/autorest/mocks v0.4.2
 	github.com/Azure/go-autorest/autorest/to v0.4.0
@@ -23,16 +23,16 @@ require (
 	golang.org/x/sys v0.0.0-20220114195835-da31bd327af9
 	golang.org/x/text v0.3.7
 	golang.org/x/time v0.0.0-20210723032227-1f47c861a9ac
-	k8s.io/api v0.23.3
-	k8s.io/apimachinery v0.23.3
-	k8s.io/apiserver v0.23.3
-	k8s.io/client-go v0.23.3
-	k8s.io/cloud-provider v0.23.3
-	k8s.io/component-base v0.23.3
-	k8s.io/component-helpers v0.23.3
-	k8s.io/controller-manager v0.23.3
-	k8s.io/klog/v2 v2.30.0
-	k8s.io/kubelet v0.23.3
+	k8s.io/api v0.23.5
+	k8s.io/apimachinery v0.23.5
+	k8s.io/apiserver v0.23.5
+	k8s.io/client-go v0.23.5
+	k8s.io/cloud-provider v0.23.5
+	k8s.io/component-base v0.23.5
+	k8s.io/component-helpers v0.23.5
+	k8s.io/controller-manager v0.23.5
+	k8s.io/klog/v2 v2.60.1
+	k8s.io/kubelet v0.23.5
 	k8s.io/utils v0.0.0-20211116205334-6203023598ed
 	sigs.k8s.io/yaml v1.3.0
 )
@@ -115,23 +115,7 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 	k8s.io/kube-openapi v0.0.0-20211115234752-e816edb12b65 // indirect
-	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.0.27 // indirect
+	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.0.30 // indirect
 	sigs.k8s.io/json v0.0.0-20211020170558-c049b76a60c6 // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.2.1 // indirect
-)
-
-replace (
-	cloud.google.com/go => cloud.google.com/go v0.81.0
-	k8s.io/api => k8s.io/api v0.23.3
-	k8s.io/apimachinery => k8s.io/apimachinery v0.23.3
-	k8s.io/apiserver => k8s.io/apiserver v0.23.3
-	k8s.io/client-go => k8s.io/client-go v0.23.3
-	k8s.io/cloud-provider => k8s.io/cloud-provider v0.23.3
-	k8s.io/component-base => k8s.io/component-base v0.23.3
-	k8s.io/component-helpers => k8s.io/component-helpers v0.23.3
-	k8s.io/controller-manager => k8s.io/controller-manager v0.23.3
-	k8s.io/klog/v2 => k8s.io/klog/v2 v2.30.0
-	k8s.io/kubelet => k8s.io/kubelet v0.23.3
-	sigs.k8s.io/apiserver-network-proxy/konnectivity-client => sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.0.27
-	sigs.k8s.io/yaml => sigs.k8s.io/yaml v1.3.0
 )
