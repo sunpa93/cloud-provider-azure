@@ -27,7 +27,7 @@ import (
 
 const (
 	// APIVersion is the API version for VirtualMachine.
-	APIVersion = "2020-12-01"
+	APIVersion = "2021-07-01"
 	// AzureStackCloudAPIVersion is the API version for Azure Stack
 	AzureStackCloudAPIVersion = "2017-12-01"
 	// AzureStackCloudName is the cloud name of Azure Stack
