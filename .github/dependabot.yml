@@ -10,6 +10,7 @@ updates:
       - "area/dependency"
       - "release-note-none"
       - "ok-to-test"
+      - "kind/cleanup"
 
   - package-ecosystem: "docker"
     directory: "/"
@@ -21,7 +22,8 @@ updates:
       - "area/dependency"
       - "release-note-none"
       - "ok-to-test"
-  
+      - "kind/cleanup"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -32,6 +34,7 @@ updates:
       - "area/dependency"
       - "release-note-none"
       - "ok-to-test"
+      - "kind/testing"
 
   - package-ecosystem: "npm"
     directory: "/site/"
@@ -43,6 +46,7 @@ updates:
       - "area/dependency"
       - "release-note-none"
       - "ok-to-test"
+      - "kind/documentation"
 
   - package-ecosystem: "gomod"
     directory: "/"
@@ -54,11 +58,78 @@ updates:
       - "area/dependency"
       - "release-note-none"
       - "ok-to-test"
+      - "kind/cleanup"
+    target-branch: "release-1.24"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        versions: [">=0.25.0"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: daily
+      time: "01:00"
+      timezone: "Asia/Shanghai"
+    target-branch: "release-1.24"
+    labels:
+      - "area/dependency"
+      - "release-note-none"
+      - "ok-to-test"
+      - "kind/testing"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "01:00"
+      timezone: "Asia/Shanghai"
+    target-branch: "release-1.24"
+    labels:
+      - "area/dependency"
+      - "release-note-none"
+      - "ok-to-test"
+      - "kind/cleanup"
+
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: daily
+      time: "01:00"
+      timezone: "Asia/Shanghai"
+    labels:
+      - "area/dependency"
+      - "release-note-none"
+      - "ok-to-test"
+      - "kind/cleanup"
     target-branch: "release-1.23"
     ignore:
       - dependency-name: "k8s.io/*"
         versions: [">=0.24.0"]
-        
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: daily
+      time: "01:00"
+      timezone: "Asia/Shanghai"
+    target-branch: "release-1.23"
+    labels:
+      - "area/dependency"
+      - "release-note-none"
+      - "ok-to-test"
+      - "kind/testing"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "01:00"
+      timezone: "Asia/Shanghai"
+    target-branch: "release-1.23"
+    labels:
+      - "area/dependency"
+      - "release-note-none"
+      - "ok-to-test"
+      - "kind/cleanup"
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
@@ -69,11 +140,36 @@ updates:
       - "area/dependency"
       - "release-note-none"
       - "ok-to-test"
+      - "kind/cleanup"
     target-branch: "release-1.1"
     ignore:
       - dependency-name: "k8s.io/*"
         versions: [">=0.23.0"]
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: daily
+      time: "01:00"
+      timezone: "Asia/Shanghai"
+    target-branch: "release-1.1"
+    labels:
+      - "area/dependency"
+      - "release-note-none"
+      - "ok-to-test"
+      - "kind/testing"
 
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "01:00"
+      timezone: "Asia/Shanghai"
+    target-branch: "release-1.1"
+    labels:
+      - "area/dependency"
+      - "release-note-none"
+      - "ok-to-test"
+      - "kind/cleanup"
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
@@ -83,23 +179,34 @@ updates:
     labels:
       - "area/dependency"
       - "release-note-none"
-      - "ok-to-test"
+      - "ok-to-test" 
+      - "kind/cleanup"
     target-branch: "release-1.0"
     ignore:
       - dependency-name: "k8s.io/*"
         versions: [">=0.22.0"]
-
-  - package-ecosystem: "gomod"
+  - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: daily
       time: "01:00"
       timezone: "Asia/Shanghai"
+    target-branch: "release-1.0"
     labels:
       - "area/dependency"
       - "release-note-none"
       - "ok-to-test"
-    target-branch: "release-0.7"
-    ignore:
-      - dependency-name: "k8s.io/*"
-        versions: [">=0.21.0"]
+      - "kind/testing"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      time: "01:00"
+      timezone: "Asia/Shanghai"
+    target-branch: "release-1.0"
+    labels:
+      - "area/dependency"
+      - "release-note-none"
+      - "ok-to-test"
+      - "kind/cleanup"

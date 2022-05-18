@@ -278,7 +278,7 @@ func StartHTTPServer(c *cloudcontrollerconfig.CompletedConfig, stopCh <-chan str
 		unsecuredMux := genericcontrollermanager.NewBaseHandler(&c.ComponentConfig.Generic.Debugging, healthzHandler)
 		handler := genericcontrollermanager.BuildHandlerChain(unsecuredMux, &c.Authorization, &c.Authentication)
 		// TODO: handle stoppedCh returned by c.SecureServing.Serve
-		if _, err := c.SecureServing.Serve(handler, 0, stopCh); err != nil {
+		if _, _, err := c.SecureServing.Serve(handler, 0, stopCh); err != nil {
 			return nil, err
 		}
 
@@ -301,7 +301,7 @@ func StartHTTPServer(c *cloudcontrollerconfig.CompletedConfig, stopCh <-chan str
 // Run runs the ExternalCMServer.  This should never exit.
 func Run(ctx context.Context, c *cloudcontrollerconfig.CompletedConfig, h *controllerhealthz.MutableHealthzHandler) error {
 	// To help debugging, immediately log version
-	klog.Infof("Version: %+v", version.Get())
+	klog.Infof("Version: %#v", version.Get())
 
 	var (
 		cloud cloudprovider.Interface
