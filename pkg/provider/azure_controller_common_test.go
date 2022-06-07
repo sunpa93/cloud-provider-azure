@@ -17,6 +17,7 @@ limitations under the License.
 package provider
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -62,6 +63,7 @@ func TestCommonAttachDisk(t *testing.T) {
 		isDataDisksFull bool
 		isBadDiskURI    bool
 		isDiskUsed      bool
+		isLunChUsed     bool
 		expectedErr     bool
 		expectedLun     int32
 	}{
@@ -93,7 +95,23 @@ func TestCommonAttachDisk(t *testing.T) {
 			expectedErr:     true,
 		},
 		{
-			desc:     "correct LUN and no error shall be returned if everything is good",
+			desc:        "correct LUN and no error shall be returned if everything is good",
+			vmList:      map[string]string{"vm1": "PowerState/Running"},
+			nodeName:    "vm1",
+			diskName:    "disk-name",
+			isLunChUsed: true,
+			existedDisk: &compute.Disk{Name: to.StringPtr("disk-name"),
+				DiskProperties: &compute.DiskProperties{
+					Encryption: &compute.Encryption{DiskEncryptionSetID: &diskEncryptionSetID, Type: compute.EncryptionTypeEncryptionAtRestWithCustomerKey},
+					DiskSizeGB: to.Int32Ptr(4096),
+					DiskState:  compute.DiskStateUnattached,
+				},
+				Tags: testTags},
+			expectedLun: 3,
+			expectedErr: false,
+		},
+		{
+			desc:     "early assigned lun value should be available via lun channel if lun channel is given",
 			vmList:   map[string]string{"vm1": "PowerState/Running"},
 			nodeName: "vm1",
 			diskName: "disk-name",
@@ -166,7 +184,19 @@ func TestCommonAttachDisk(t *testing.T) {
 		mockVMsClient.EXPECT().UpdateAsync(gomock.Any(), testCloud.ResourceGroup, gomock.Any(), gomock.Any(), gomock.Any()).Return(&azure.Future{}, nil).AnyTimes()
 		mockVMsClient.EXPECT().WaitForUpdateResult(gomock.Any(), gomock.Any(), testCloud.ResourceGroup, gomock.Any()).Return(nil).AnyTimes()
 
+		if test.isLunChUsed {
+			lunCh := make(chan int32, 1)
+			ctx = context.WithValue(ctx, LunChannelContextKey, lunCh)
+			go func() {
+				t.Run("listen to lun channel", func(t *testing.T) {
+					lun := <-lunCh
+					assert.Equal(t, test.expectedLun, lun)
+				})
+			}()
+		}
+
 		lun, err := testCloud.AttachDisk(ctx, true, "", diskURI, test.nodeName, compute.CachingTypesReadOnly, test.existedDisk)
+
 		assert.Equal(t, test.expectedLun, lun, "TestCase[%d]: %s", i, test.desc)
 		assert.Equal(t, test.expectedErr, err != nil, "TestCase[%d]: %s, return error: %v", i, test.desc, err)
 	}
