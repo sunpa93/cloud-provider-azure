@@ -41,7 +41,10 @@ import (
 	"sigs.k8s.io/cloud-provider-azure/pkg/metrics"
 )
 
+type CloudContextKey string
+
 const (
+	LunChannelContextKey CloudContextKey = "cloud-provier-azure/lun-chan"
 	// Disk Caching is not supported for disks 4 TiB and larger
 	// https://docs.microsoft.com/en-us/azure/virtual-machines/premium-storage-performance#disk-caching
 	diskCachingLimit = 4096 // GiB
@@ -98,6 +101,7 @@ type AttachDiskOptions struct {
 	diskEncryptionSetID     string
 	writeAcceleratorEnabled bool
 	lun                     int32
+	lunCh                   chan int32 // channel for early return of lun value
 }
 
 func (a *AttachDiskOptions) String() string {
@@ -201,8 +205,15 @@ func (c *controllerCommon) AttachDisk(ctx context.Context, async bool, diskName,
 		}
 	}
 
+	// lun channel is used to return assigned lun values preemptively
+	var lunCh chan int32
+	if val := ctx.Value(LunChannelContextKey); val != nil {
+		lunCh = val.(chan int32)
+	}
+
 	options := &AttachDiskOptions{
 		lun:                     -1,
+		lunCh:                   lunCh,
 		diskName:                diskName,
 		cachingMode:             cachingMode,
 		diskEncryptionSetID:     diskEncryptionSetID,
@@ -496,6 +507,12 @@ func (c *controllerCommon) SetDiskLun(nodeName types.NodeName, disksPendingAttac
 			opt.lun = lun
 		}
 		opt.lun = availableDiskLuns[count]
+		if opt.lunCh != nil {
+			// if lun channel is provided, feed the channel the determined lun value
+			go func() {
+				opt.lunCh <- opt.lun
+			}()
+		}
 		count++
 	}
 
