@@ -101,7 +101,7 @@ type AttachDiskOptions struct {
 	diskEncryptionSetID     string
 	writeAcceleratorEnabled bool
 	lun                     int32
-	lunCh                   chan int32 // channel for early return of lun value
+	lunCh                   chan (int32) // channel for early return of lun value
 }
 
 func (a *AttachDiskOptions) String() string {
@@ -147,8 +147,17 @@ func (c *controllerCommon) getNodeVMSet(nodeName types.NodeName, crt azcache.Azu
 // return (lun, error)
 func (c *controllerCommon) AttachDisk(ctx context.Context, async bool, diskName, diskURI string, nodeName types.NodeName,
 	cachingMode compute.CachingTypes, disk *compute.Disk) (int32, error) {
+	// lun channel is used to return assigned lun values preemptively
+
 	diskEncryptionSetID := ""
 	writeAcceleratorEnabled := false
+	var waitForBatch bool
+	var lunCh chan int32
+	defer func() {
+		if !waitForBatch && lunCh != nil {
+			close(lunCh)
+		}
+	}()
 
 	// there is possibility that disk is nil when GetDisk is throttled
 	// don't check disk state when GetDisk is throttled
@@ -205,12 +214,6 @@ func (c *controllerCommon) AttachDisk(ctx context.Context, async bool, diskName,
 		}
 	}
 
-	// lun channel is used to return assigned lun values preemptively
-	var lunCh chan int32
-	if val := ctx.Value(LunChannelContextKey); val != nil {
-		lunCh = val.(chan int32)
-	}
-
 	options := &AttachDiskOptions{
 		lun:                     -1,
 		lunCh:                   lunCh,
@@ -231,9 +234,13 @@ func (c *controllerCommon) AttachDisk(ctx context.Context, async bool, diskName,
 		resourceGroup = c.resourceGroup
 	}
 
+	if val := ctx.Value(LunChannelContextKey); val != nil {
+		lunCh = val.(chan int32)
+	}
 	batchKey := metrics.KeyFromAttributes(c.subscriptionID, strings.ToLower(resourceGroup), strings.ToLower(string(nodeName)))
 	r, err := c.attachDiskProcessor.Do(ctx, batchKey, diskToAttach)
 	if err == nil {
+		waitForBatch = true
 		select {
 		case <-ctx.Done():
 			err = ctx.Err()
@@ -509,9 +516,10 @@ func (c *controllerCommon) SetDiskLun(nodeName types.NodeName, disksPendingAttac
 		opt.lun = availableDiskLuns[count]
 		if opt.lunCh != nil {
 			// if lun channel is provided, feed the channel the determined lun value
-			go func() {
-				opt.lunCh <- opt.lun
-			}()
+			go func(lunCh chan int32, lun int32) {
+				lunCh <- lun
+				close(lunCh)
+			}(opt.lunCh, opt.lun)
 		}
 		count++
 	}
