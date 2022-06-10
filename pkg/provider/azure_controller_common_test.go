@@ -184,13 +184,17 @@ func TestCommonAttachDisk(t *testing.T) {
 		mockVMsClient.EXPECT().UpdateAsync(gomock.Any(), testCloud.ResourceGroup, gomock.Any(), gomock.Any(), gomock.Any()).Return(&azure.Future{}, nil).AnyTimes()
 		mockVMsClient.EXPECT().WaitForUpdateResult(gomock.Any(), gomock.Any(), testCloud.ResourceGroup, gomock.Any()).Return(nil).AnyTimes()
 
+		complete := make(chan bool)
+		defer close(complete)
 		if test.isLunChUsed {
 			lunCh := make(chan int32, 1)
+			oldCtx := ctx
 			ctx = context.WithValue(ctx, LunChannelContextKey, lunCh)
 			go func() {
 				t.Run("listen to lun channel", func(t *testing.T) {
 					lun := <-lunCh
 					assert.Equal(t, test.expectedLun, lun)
+					ctx = oldCtx
 				})
 			}()
 		}
