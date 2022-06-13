@@ -214,6 +214,10 @@ func (c *controllerCommon) AttachDisk(ctx context.Context, async bool, diskName,
 		}
 	}
 
+	if val := ctx.Value(LunChannelContextKey); val != nil {
+		lunCh = val.(chan int32)
+	}
+
 	options := &AttachDiskOptions{
 		lun:                     -1,
 		lunCh:                   lunCh,
@@ -234,9 +238,6 @@ func (c *controllerCommon) AttachDisk(ctx context.Context, async bool, diskName,
 		resourceGroup = c.resourceGroup
 	}
 
-	if val := ctx.Value(LunChannelContextKey); val != nil {
-		lunCh = val.(chan int32)
-	}
 	batchKey := metrics.KeyFromAttributes(c.subscriptionID, strings.ToLower(resourceGroup), strings.ToLower(string(nodeName)))
 	r, err := c.attachDiskProcessor.Do(ctx, batchKey, diskToAttach)
 	if err == nil {
