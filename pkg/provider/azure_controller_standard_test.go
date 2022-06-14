@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/vmclient/mockvmclient"
 	azcache "sigs.k8s.io/cloud-provider-azure/pkg/cache"
 	"sigs.k8s.io/cloud-provider-azure/pkg/retry"
+	providerutils "sigs.k8s.io/cloud-provider-azure/pkg/util/provider"
 )
 
 var (
@@ -102,15 +103,10 @@ func TestStandardAttachDisk(t *testing.T) {
 			mockVMsClient.EXPECT().UpdateAsync(gomock.Any(), testCloud.ResourceGroup, gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 		}
 
-		options := AttachDiskOptions{
-			lun:                     0,
-			diskName:                "",
-			cachingMode:             compute.CachingTypesReadOnly,
-			diskEncryptionSetID:     "",
-			writeAcceleratorEnabled: false,
-		}
-		diskMap := map[string]*AttachDiskOptions{
-			"uri": &options,
+		options := providerutils.NewAttachDiskOptions(compute.CachingTypesReadOnly, "", "", false, 0, nil)
+
+		diskMap := map[string]*providerutils.AttachDiskOptions{
+			"uri": options,
 		}
 		_, err := vmSet.AttachDisk(ctx, test.nodeName, diskMap)
 		assert.Equal(t, test.expectedErr, err != nil, "TestCase[%d]: %s, err: %v", i, test.desc, err)
