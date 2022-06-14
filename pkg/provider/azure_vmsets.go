@@ -28,6 +28,7 @@ import (
 	cloudprovider "k8s.io/cloud-provider"
 
 	azcache "sigs.k8s.io/cloud-provider-azure/pkg/cache"
+	providerutils "sigs.k8s.io/cloud-provider-azure/pkg/util/provider"
 )
 
 //go:generate sh -c "mockgen -destination=$GOPATH/src/sigs.k8s.io/cloud-provider-azure/pkg/provider/azure_mock_vmsets.go -source=$GOPATH/src/sigs.k8s.io/cloud-provider-azure/pkg/provider/azure_vmsets.go -package=provider VMSet"
@@ -76,7 +77,7 @@ type VMSet interface {
 	EnsureBackendPoolDeletedFromVMSets(vmSetNamesMap map[string]bool, backendPoolID string) error
 
 	// AttachDisk attaches a disk to vm
-	AttachDisk(ctx context.Context, nodeName types.NodeName, diskMap map[string]*AttachDiskOptions) (*azure.Future, error)
+	AttachDisk(ctx context.Context, nodeName types.NodeName, diskMap map[string]*providerutils.AttachDiskOptions) (*azure.Future, error)
 	// DetachDisk detaches a disk from vm
 	DetachDisk(ctx context.Context, nodeName types.NodeName, diskMap map[string]string) error
 	// WaitForUpdateResult waits for the response of the update request
