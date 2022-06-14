@@ -40,6 +40,7 @@ import (
 	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/vmssvmclient/mockvmssvmclient"
 	"sigs.k8s.io/cloud-provider-azure/pkg/consts"
 	"sigs.k8s.io/cloud-provider-azure/pkg/retry"
+	providerutils "sigs.k8s.io/cloud-provider-azure/pkg/util/provider"
 )
 
 func TestCommonAttachDisk(t *testing.T) {
@@ -461,7 +462,7 @@ func TestSetDiskLun(t *testing.T) {
 		desc            string
 		nodeName        string
 		diskURI         string
-		diskMap         map[string]*AttachDiskOptions
+		diskMap         map[string]*providerutils.AttachDiskOptions
 		isDataDisksFull bool
 		expectedErr     bool
 		expectedLun     int32
@@ -469,13 +470,13 @@ func TestSetDiskLun(t *testing.T) {
 		{
 			desc:        "the minimal LUN shall be returned if there's enough room for extra disks",
 			nodeName:    "nodeName",
-			diskMap:     map[string]*AttachDiskOptions{"diskURI": {}},
+			diskMap:     map[string]*providerutils.AttachDiskOptions{"diskURI": {}},
 			expectedErr: false,
 		},
 		{
 			desc:            "LUN -1 and error shall be returned if there's no available LUN",
 			nodeName:        "nodeName",
-			diskMap:         map[string]*AttachDiskOptions{"diskURI": {}},
+			diskMap:         map[string]*providerutils.AttachDiskOptions{"diskURI": {}},
 			isDataDisksFull: true,
 			expectedErr:     true,
 		},
