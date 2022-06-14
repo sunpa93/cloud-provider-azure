@@ -100,6 +100,7 @@ type AttachDiskOptions struct {
 	diskName                string
 	diskEncryptionSetID     string
 	writeAcceleratorEnabled bool
+	lunAssigned             bool
 	lun                     int32
 	lunCh                   chan (int32) // channel for early return of lun value
 }
@@ -147,11 +148,11 @@ func (c *controllerCommon) getNodeVMSet(nodeName types.NodeName, crt azcache.Azu
 // return (lun, error)
 func (c *controllerCommon) AttachDisk(ctx context.Context, async bool, diskName, diskURI string, nodeName types.NodeName,
 	cachingMode compute.CachingTypes, disk *compute.Disk) (int32, error) {
-	// lun channel is used to return assigned lun values preemptively
 
 	diskEncryptionSetID := ""
 	writeAcceleratorEnabled := false
 	var waitForBatch bool
+	// lun channel is used to return assigned lun values preemptively
 	var lunCh chan int32
 	defer func() {
 		if !waitForBatch && lunCh != nil {
@@ -242,14 +243,14 @@ func (c *controllerCommon) AttachDisk(ctx context.Context, async bool, diskName,
 	r, err := c.attachDiskProcessor.Do(ctx, batchKey, diskToAttach)
 	if err == nil {
 		waitForBatch = true
-		select {
-		case <-ctx.Done():
-			err = ctx.Err()
-		case result := <-r.(chan (attachDiskResult)):
-			if err = result.err; err == nil {
-				return result.lun, nil
-			}
+		result := <-r.(chan (attachDiskResult))
+		if err = result.err; err == nil {
+			return result.lun, nil
 		}
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		waitForBatch = false
 	}
 
 	klog.Errorf("azureDisk - attach disk(%s, %s) failed, err: %v", diskName, diskURI, err)
@@ -464,6 +465,14 @@ func (c *controllerCommon) GetDiskLun(diskName, diskURI string, nodeName types.N
 // SetDiskLun find unused luns and allocate lun for every disk in disksPendingAttach map.
 // Return err if not enough luns are found.
 func (c *controllerCommon) SetDiskLun(nodeName types.NodeName, disksPendingAttach map[string]*AttachDiskOptions) error {
+	defer func() {
+		for _, opt := range disksPendingAttach {
+			if opt != nil && !opt.lunAssigned && opt.lunCh != nil {
+				close(opt.lunCh)
+			}
+		}
+	}()
+
 	disks, _, err := c.getNodeDataDisks(nodeName, azcache.CacheReadTypeDefault)
 	if err != nil {
 		klog.Errorf("error of getting data disks for node %s: %v", nodeName, err)
@@ -515,6 +524,8 @@ func (c *controllerCommon) SetDiskLun(nodeName types.NodeName, disksPendingAttac
 			opt.lun = lun
 		}
 		opt.lun = availableDiskLuns[count]
+		opt.lunAssigned = true
+
 		if opt.lunCh != nil {
 			// if lun channel is provided, feed the channel the determined lun value
 			go func(lunCh chan int32, lun int32) {

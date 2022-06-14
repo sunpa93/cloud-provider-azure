@@ -44,13 +44,8 @@ func (e *entry) setResult(value interface{}, err error) {
 
 // getResult waits for and returns the result of a batch entry.
 func (e *entry) getResult(ctx context.Context) (interface{}, error) {
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-
-	case r := <-e.resultChan:
-		return r.value, r.err
-	}
+	r := <-e.resultChan
+	return r.value, r.err
 }
 
 // getResultChar returns the result channel of a batch entry.
