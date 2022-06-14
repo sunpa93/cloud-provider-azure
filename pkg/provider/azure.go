@@ -77,6 +77,7 @@ import (
 	"sigs.k8s.io/cloud-provider-azure/pkg/metrics"
 	nodemanager "sigs.k8s.io/cloud-provider-azure/pkg/nodemanager"
 	"sigs.k8s.io/cloud-provider-azure/pkg/retry"
+	providerutils "sigs.k8s.io/cloud-provider-azure/pkg/util/provider"
 
 	// ensure the newly added package from azure-sdk-for-go is in vendor/
 	_ "sigs.k8s.io/cloud-provider-azure/pkg/azureclients/containerserviceclient"
@@ -986,9 +987,9 @@ func initDiskControllers(az *Cloud) error {
 	attachBatchFn := func(ctx context.Context, key string, values []interface{}) ([]interface{}, error) {
 		subscriptionID, resourceGroup, nodeName := metrics.AttributesFromKey(key)
 
-		disksToAttach := make([]attachDiskParams, len(values))
+		disksToAttach := make([]providerutils.AttachDiskParams, len(values))
 		for i, value := range values {
-			disksToAttach[i] = value.(attachDiskParams)
+			disksToAttach[i] = value.(providerutils.AttachDiskParams)
 		}
 
 		lunChans, err := common.attachDiskBatchToNode(ctx, subscriptionID, resourceGroup, types.NodeName(nodeName), disksToAttach)
@@ -1011,9 +1012,9 @@ func initDiskControllers(az *Cloud) error {
 	detachBatchFn := func(ctx context.Context, key string, values []interface{}) ([]interface{}, error) {
 		subscriptionID, resourceGroup, nodeName := metrics.AttributesFromKey(key)
 
-		disksToDetach := make([]detachDiskParams, len(values))
+		disksToDetach := make([]providerutils.DetachDiskParams, len(values))
 		for i, value := range values {
-			disksToDetach[i] = value.(detachDiskParams)
+			disksToDetach[i] = value.(providerutils.DetachDiskParams)
 		}
 
 		err := common.detachDiskBatchFromNode(ctx, subscriptionID, resourceGroup, types.NodeName(nodeName), disksToDetach)
