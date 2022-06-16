@@ -227,7 +227,7 @@ func (c *controllerCommon) AttachDisk(ctx context.Context, async bool, diskName,
 		writeAcceleratorEnabled: writeAcceleratorEnabled,
 	}
 
-	diskToAttach := attachDiskParams{
+	diskToAttach := &AttachDiskParams{
 		diskURI: diskURI,
 		options: options,
 		async:   async,
@@ -239,9 +239,9 @@ func (c *controllerCommon) AttachDisk(ctx context.Context, async bool, diskName,
 	}
 
 	batchKey := metrics.KeyFromAttributes(c.subscriptionID, strings.ToLower(resourceGroup), strings.ToLower(string(nodeName)))
+	waitForBatch = true
 	r, err := c.attachDiskProcessor.Do(ctx, batchKey, diskToAttach)
 	if err == nil {
-		waitForBatch = true
 		select {
 		case <-ctx.Done():
 			err = ctx.Err()
@@ -256,10 +256,16 @@ func (c *controllerCommon) AttachDisk(ctx context.Context, async bool, diskName,
 	return -1, err
 }
 
-type attachDiskParams struct {
+type AttachDiskParams struct {
 	diskURI string
 	options *AttachDiskOptions
 	async   bool
+}
+
+func (a *AttachDiskParams) CleanUp() {
+	if a.options != nil && a.options.lunCh != nil {
+		close(a.options.lunCh)
+	}
 }
 
 type attachDiskResult struct {
@@ -267,7 +273,7 @@ type attachDiskResult struct {
 	err error
 }
 
-func (c *controllerCommon) attachDiskBatchToNode(ctx context.Context, subscriptionID, resourceGroup string, nodeName types.NodeName, disksToAttach []attachDiskParams) ([]chan (attachDiskResult), error) {
+func (c *controllerCommon) attachDiskBatchToNode(ctx context.Context, subscriptionID, resourceGroup string, nodeName types.NodeName, disksToAttach []*AttachDiskParams) ([]chan (attachDiskResult), error) {
 	diskMap := make(map[string]*AttachDiskOptions, len(disksToAttach))
 	lunChans := make([]chan (attachDiskResult), len(disksToAttach))
 	async := false
@@ -358,7 +364,7 @@ func (c *controllerCommon) DetachDisk(ctx context.Context, diskName, diskURI str
 		resourceGroup = c.resourceGroup
 	}
 
-	diskToDetach := detachDiskParams{
+	diskToDetach := &detachDiskParams{
 		diskName: diskName,
 		diskURI:  diskURI,
 	}
@@ -378,7 +384,7 @@ type detachDiskParams struct {
 	diskURI  string
 }
 
-func (c *controllerCommon) detachDiskBatchFromNode(ctx context.Context, subscriptionID, resourceGroup string, nodeName types.NodeName, disksToDetach []detachDiskParams) error {
+func (c *controllerCommon) detachDiskBatchFromNode(ctx context.Context, subscriptionID, resourceGroup string, nodeName types.NodeName, disksToDetach []*detachDiskParams) error {
 	diskMap := make(map[string]string, len(disksToDetach))
 	for _, disk := range disksToDetach {
 		diskMap[disk.diskURI] = disk.diskName
@@ -517,10 +523,7 @@ func (c *controllerCommon) SetDiskLun(nodeName types.NodeName, disksPendingAttac
 		opt.lun = availableDiskLuns[count]
 		if opt.lunCh != nil {
 			// if lun channel is provided, feed the channel the determined lun value
-			go func(lunCh chan int32, lun int32) {
-				lunCh <- lun
-				close(lunCh)
-			}(opt.lunCh, opt.lun)
+			opt.lunCh <- opt.lun
 		}
 		count++
 	}
