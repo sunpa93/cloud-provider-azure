@@ -25,12 +25,15 @@ import (
 	"github.com/go-logr/logr"
 	"golang.org/x/sync/semaphore"
 	"golang.org/x/time/rate"
-	"sigs.k8s.io/cloud-provider-azure/pkg/util/provider"
 )
 
 const (
 	defaultVerboseLogLevel int = 1
 )
+
+type EntryValue interface {
+	CleanUp()
+}
 
 // newEntry returns a new batch entry.
 func newEntry(ctx context.Context, value interface{}) *entry {
@@ -39,8 +42,8 @@ func newEntry(ctx context.Context, value interface{}) *entry {
 
 // setResult sets the result of a batch entry.
 func (e *entry) setResult(value interface{}, err error) {
-	if attachDiskParams, ok := e.value.(provider.AttachDiskParams); ok {
-		attachDiskParams.Options().CleanUpLunChannel()
+	if entryValue, ok := e.value.(EntryValue); ok {
+		entryValue.CleanUp()
 	}
 	e.resultChan <- Result{value: value, err: err}
 	close(e.resultChan)

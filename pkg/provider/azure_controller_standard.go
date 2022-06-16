@@ -30,11 +30,10 @@ import (
 
 	azcache "sigs.k8s.io/cloud-provider-azure/pkg/cache"
 	"sigs.k8s.io/cloud-provider-azure/pkg/consts"
-	providerutils "sigs.k8s.io/cloud-provider-azure/pkg/util/provider"
 )
 
 // AttachDisk attaches a disk to vm
-func (as *availabilitySet) AttachDisk(ctx context.Context, nodeName types.NodeName, diskMap map[string]*providerutils.AttachDiskOptions) (*azure.Future, error) {
+func (as *availabilitySet) AttachDisk(ctx context.Context, nodeName types.NodeName, diskMap map[string]*AttachDiskOptions) (*azure.Future, error) {
 	vm, err := as.getVirtualMachine(nodeName, azcache.CacheReadTypeDefault)
 	if err != nil {
 		return nil, err
@@ -65,26 +64,26 @@ func (as *availabilitySet) AttachDisk(ctx context.Context, nodeName types.NodeNa
 		}
 
 		managedDisk := &compute.ManagedDiskParameters{ID: &diskURI}
-		if opt.DiskEncryptionSetID() == "" {
+		if opt.diskEncryptionSetID == "" {
 			if vm.StorageProfile.OsDisk != nil &&
 				vm.StorageProfile.OsDisk.ManagedDisk != nil &&
 				vm.StorageProfile.OsDisk.ManagedDisk.DiskEncryptionSet != nil &&
 				vm.StorageProfile.OsDisk.ManagedDisk.DiskEncryptionSet.ID != nil {
 				// set diskEncryptionSet as value of os disk by default
-				opt.SetDiskEncryptionSetID(*vm.StorageProfile.OsDisk.ManagedDisk.DiskEncryptionSet.ID)
+				opt.diskEncryptionSetID = *vm.StorageProfile.OsDisk.ManagedDisk.DiskEncryptionSet.ID
 			}
 		}
-		if opt.DiskEncryptionSetID() != "" {
-			managedDisk.DiskEncryptionSet = &compute.DiskEncryptionSetParameters{ID: to.StringPtr(opt.DiskEncryptionSetID())}
+		if opt.diskEncryptionSetID != "" {
+			managedDisk.DiskEncryptionSet = &compute.DiskEncryptionSetParameters{ID: &opt.diskEncryptionSetID}
 		}
 		disks = append(disks,
 			compute.DataDisk{
-				Name:                    to.StringPtr(opt.DiskName()),
-				Lun:                     to.Int32Ptr(opt.Lun()),
-				Caching:                 opt.CachingMode(),
+				Name:                    &opt.diskName,
+				Lun:                     &opt.lun,
+				Caching:                 opt.cachingMode,
 				CreateOption:            "attach",
 				ManagedDisk:             managedDisk,
-				WriteAcceleratorEnabled: to.BoolPtr(opt.WriteAcceleratorEnabled()),
+				WriteAcceleratorEnabled: to.BoolPtr(opt.writeAcceleratorEnabled),
 			})
 	}
 
