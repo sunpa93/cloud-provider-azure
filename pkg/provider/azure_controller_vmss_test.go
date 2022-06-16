@@ -33,7 +33,6 @@ import (
 	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/vmssvmclient/mockvmssvmclient"
 	azcache "sigs.k8s.io/cloud-provider-azure/pkg/cache"
 	"sigs.k8s.io/cloud-provider-azure/pkg/retry"
-	providerutils "sigs.k8s.io/cloud-provider-azure/pkg/util/provider"
 )
 
 func TestAttachDiskWithVMSS(t *testing.T) {
@@ -115,13 +114,19 @@ func TestAttachDiskWithVMSS(t *testing.T) {
 			mockVMSSVMClient.EXPECT().UpdateAsync(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 		}
 
-		diskMap := map[string]*providerutils.AttachDiskOptions{}
+		diskMap := map[string]*AttachDiskOptions{}
 		for i, diskName := range test.disks {
-			options := providerutils.NewAttachDiskOptions(compute.CachingTypesReadWrite, diskName, "", true, int32(i), nil)
+			options := AttachDiskOptions{
+				lun:                     int32(i),
+				diskName:                diskName,
+				cachingMode:             compute.CachingTypesReadWrite,
+				diskEncryptionSetID:     "",
+				writeAcceleratorEnabled: true,
+			}
 
 			diskURI := fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Compute/disks/%s",
 				testCloud.SubscriptionID, testCloud.ResourceGroup, diskName)
-			diskMap[diskURI] = options
+			diskMap[diskURI] = &options
 		}
 		_, err = ss.AttachDisk(ctx, test.vmssvmName, diskMap)
 		assert.Equal(t, test.expectedErr, err != nil, "TestCase[%d]: %s, return error: %v", i, test.desc, err)
