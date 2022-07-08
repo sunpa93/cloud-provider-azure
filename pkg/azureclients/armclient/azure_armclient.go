@@ -19,11 +19,13 @@ package armclient
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"html"
 	"io/ioutil"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httputil"
 	"net/url"
 	"strings"
@@ -43,18 +45,44 @@ import (
 
 var _ Interface = &Client{}
 
+// Singleton transport for all connections to ARM.
+var commTransport *http.Transport
+
+func init() {
+	// Use behaviour compatible with DefaultTransport, but override MaxIdleConns and MaxIdleConns
+	const maxIdleConns = 64
+	const maxIdleConnsPerHost = 64
+	defaultTransport := http.DefaultTransport.(*http.Transport)
+	commTransport = &http.Transport{
+		Proxy:                 defaultTransport.Proxy,
+		DialContext:           defaultTransport.DialContext,
+		MaxIdleConns:          maxIdleConns,
+		MaxIdleConnsPerHost:   maxIdleConnsPerHost,
+		IdleConnTimeout:       defaultTransport.IdleConnTimeout,
+		TLSHandshakeTimeout:   defaultTransport.TLSHandshakeTimeout,
+		ExpectContinueTimeout: defaultTransport.ExpectContinueTimeout,
+		TLSClientConfig: &tls.Config{
+			MinVersion:    tls.VersionTLS12,
+			Renegotiation: tls.RenegotiateNever,
+		},
+	}
+}
+
 // Client implements ARM client Interface.
 type Client struct {
 	client           autorest.Client
+	backoff          *retry.Backoff
 	baseURI          string
 	apiVersion       string
 	regionalEndpoint string
 }
 
 // New creates a ARM client
-func New(authorizer autorest.Authorizer, clientConfig azureclients.ClientConfig, baseURI, apiVersion string, sendDecoraters ...autorest.SendDecorator) *Client {
+func New(authorizer autorest.Authorizer, clientConfig azureclients.ClientConfig, baseURI, apiVersion string) *Client {
 	restClient := autorest.NewClientWithUserAgent(clientConfig.UserAgent)
 	restClient.Authorizer = authorizer
+	restClient.Sender = getSender()
+	restClient.Sender = autorest.DecorateSender(restClient.Sender, autorest.DoCloseIfError())
 
 	if clientConfig.UserAgent == "" {
 		restClient.UserAgent = GetUserAgent(restClient)
@@ -89,21 +117,20 @@ func New(authorizer autorest.Authorizer, clientConfig azureclients.ClientConfig,
 
 	url, _ := url.Parse(baseURI)
 
-	client := &Client{
+	return &Client{
 		client:           restClient,
 		baseURI:          baseURI,
+		backoff:          backoff,
 		apiVersion:       apiVersion,
 		regionalEndpoint: fmt.Sprintf("%s.%s", clientConfig.Location, url.Host),
 	}
-	client.client.Sender = autorest.DecorateSender(client.client,
-		autorest.DoCloseIfError(),
-		retry.DoExponentialBackoffRetry(backoff),
-		DoHackRegionalRetryDecorator(client),
-	)
+}
 
-	client.client.Sender = autorest.DecorateSender(client.client.Sender, sendDecoraters...)
-
-	return client
+func getSender() autorest.Sender {
+	// Setup sender with singleton transport so that connections to ARM are shared.
+	// Refer https://github.com/Azure/go-autorest/blob/master/autorest/sender.go#L128 for how the sender is created.
+	j, _ := cookiejar.New(nil)
+	return &http.Client{Jar: j, Transport: commTransport}
 }
 
 // GetUserAgent gets the autorest client with a user agent that
@@ -191,12 +218,16 @@ func DoHackRegionalRetryDecorator(c *Client) autorest.SendDecorator {
 	}
 }
 
-// Send sends a http request to ARM service with possible retry to regional ARM endpoint.
-func (c *Client) Send(ctx context.Context, request *http.Request, decorators ...autorest.SendDecorator) (*http.Response, *retry.Error) {
+// sendRequest sends a http request to ARM service.
+// Although Azure SDK supports retries per https://github.com/azure/azure-sdk-for-go#request-retry-policy, we
+// disable it since we want to fully control the retry policies.
+func (c *Client) sendRequest(request *http.Request) (*http.Response, *retry.Error) {
+	sendBackoff := *c.backoff
 	response, err := autorest.SendWithSender(
 		c.client,
 		request,
-		decorators...,
+		retry.DoExponentialBackoffRetry(&sendBackoff),
+		DoHackRegionalRetryDecorator(c),
 	)
 
 	if response == nil && err == nil {
@@ -204,6 +235,11 @@ func (c *Client) Send(ctx context.Context, request *http.Request, decorators ...
 	}
 
 	return response, retry.GetError(response, err)
+}
+
+// Send sends a http request to ARM service with possible retry to regional ARM endpoint.
+func (c *Client) Send(ctx context.Context, request *http.Request, decorators ...autorest.SendDecorator) (*http.Response, *retry.Error) {
+	return c.sendRequest(request)
 }
 
 func dumpRequest(req *http.Request, v klog.Level) {
@@ -310,7 +346,13 @@ func (c *Client) WaitForAsyncOperationResult(ctx context.Context, future *azure.
 		klog.V(5).Infof("Received error in WaitForAsyncOperationCompletion: '%v'", err)
 		return nil, err
 	}
-	return future.GetResult(c.client)
+
+	sendBackoff := *c.backoff
+	sender := autorest.DecorateSender(
+		c.client,
+		retry.DoExponentialBackoffRetry(&sendBackoff),
+	)
+	return future.GetResult(sender)
 }
 
 // SendAsync send a request and return a future object representing the async result as well as the origin http response
@@ -651,7 +693,7 @@ func (c *Client) PostResource(ctx context.Context, resourceID, action string, pa
 		return nil, retry.NewError(false, err)
 	}
 
-	return c.Send(ctx, request)
+	return c.sendRequest(request)
 }
 
 // DeleteResource deletes a resource by resource ID
@@ -685,7 +727,7 @@ func (c *Client) HeadResource(ctx context.Context, resourceID string) (*http.Res
 		return nil, retry.NewError(false, err)
 	}
 
-	return c.Send(ctx, request)
+	return c.sendRequest(request)
 }
 
 // DeleteResourceAsync delete a resource by resource ID and returns a future representing the async result
@@ -703,7 +745,7 @@ func (c *Client) DeleteResourceAsync(ctx context.Context, resourceID, ifMatch st
 		return nil, retry.NewError(false, err)
 	}
 
-	resp, rerr := c.Send(ctx, deleteRequest)
+	resp, rerr := c.sendRequest(deleteRequest)
 	defer c.CloseResponse(ctx, resp)
 	if rerr != nil {
 		klog.V(5).Infof("Received error in %s: resourceID: %s, error: %s", "deleteAsync.send", resourceID, rerr.Error())
