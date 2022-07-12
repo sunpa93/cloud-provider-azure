@@ -81,7 +81,6 @@ func New(authorizer autorest.Authorizer, clientConfig azureclients.ClientConfig,
 	restClient := autorest.NewClientWithUserAgent(clientConfig.UserAgent)
 	restClient.Authorizer = authorizer
 	restClient.Sender = getSender()
-	restClient.Sender = autorest.DecorateSender(restClient.Sender, autorest.DoCloseIfError())
 
 	if clientConfig.UserAgent == "" {
 		restClient.UserAgent = GetUserAgent(restClient)
@@ -122,12 +121,14 @@ func New(authorizer autorest.Authorizer, clientConfig azureclients.ClientConfig,
 		apiVersion:       apiVersion,
 		regionalEndpoint: fmt.Sprintf("%s.%s", clientConfig.Location, url.Host),
 	}
-	client.client.Sender = autorest.DecorateSender(client.client.Sender, sendDecoraters...)
+
 	client.client.Sender = autorest.DecorateSender(client.client,
 		autorest.DoCloseIfError(),
 		retry.DoExponentialBackoffRetry(backoff),
 		DoHackRegionalRetryDecorator(client),
 	)
+
+	client.client.Sender = autorest.DecorateSender(client.client, sendDecoraters...)
 
 	return client
 }
