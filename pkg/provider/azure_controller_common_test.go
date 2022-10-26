@@ -18,10 +18,12 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-03-01/compute"
 	"github.com/Azure/go-autorest/autorest/azure"
@@ -42,6 +44,12 @@ import (
 	"sigs.k8s.io/cloud-provider-azure/pkg/retry"
 )
 
+var (
+	operationPreemptedError      = retry.NewError(false, errors.New(`Code="OperationPreempted" Message="Operation execution has been preempted by a more recent operation."`))
+	conflictingUserInputError    = retry.NewError(false, errors.New(`Code="ConflictingUserInput" Message="Cannot attach the disk pvc-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxx to VM /subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxx/resourceGroups/test-rg/providers/Microsoft.Compute/virtualMachineScaleSets/aks-nodepool0-00000000-vmss/virtualMachines/aks-nodepool0-00000000-vmss_0 because it is already attached to VM /subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxx/resourceGroups/test-rg/providers/Microsoft.Compute/virtualMachineScaleSets/aks-nodepool0-00000000-vmss/virtualMachines/aks-nodepool0-00000000-vmss_1. A disk can be attached to only one VM at a time."`))
+	vmExtensionProvisioningError = retry.NewError(false, errors.New(`Code="VMExtensionProvisioningError" Message="Multiple VM extensions failed to be provisioned on the VM. Please see the VM extension instance view for other failures. The first extension failed due to the error: VM 'aks-nodepool0-00000000-vmss_00' has not reported status for VM agent or extensions. Verify that the OS is up and healthy, the VM has a running VM agent, and that it can establish outbound connections to Azure storage. Please refer to https://aka.ms/vmextensionlinuxtroubleshoot for additional VM agent troubleshooting information."`))
+)
+
 func TestCommonAttachDisk(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -49,23 +57,48 @@ func TestCommonAttachDisk(t *testing.T) {
 	ctx, cancel := getContextWithCancel()
 	defer cancel()
 
+	initVM := func(testCloud *Cloud, expectedVMs []compute.VirtualMachine) {
+		mockVMsClient := testCloud.VirtualMachinesClient.(*mockvmclient.MockInterface)
+		for _, vm := range expectedVMs {
+			mockVMsClient.EXPECT().Get(gomock.Any(), testCloud.ResourceGroup, *vm.Name, gomock.Any()).Return(vm, nil).AnyTimes()
+		}
+		if len(expectedVMs) == 0 {
+			mockVMsClient.EXPECT().Get(gomock.Any(), testCloud.ResourceGroup, gomock.Any(), gomock.Any()).Return(compute.VirtualMachine{}, &retry.Error{HTTPStatusCode: http.StatusNotFound, RawError: cloudprovider.InstanceNotFound}).AnyTimes()
+		}
+	}
+
+	defaultSetup := func(testCloud *Cloud, expectedVMs []compute.VirtualMachine) {
+		initVM(testCloud, expectedVMs)
+		mockVMsClient := testCloud.VirtualMachinesClient.(*mockvmclient.MockInterface)
+		mockVMsClient.EXPECT().Update(gomock.Any(), testCloud.ResourceGroup, gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		mockVMsClient.EXPECT().UpdateAsync(gomock.Any(), testCloud.ResourceGroup, gomock.Any(), gomock.Any(), gomock.Any()).Return(&azure.Future{}, nil).AnyTimes()
+		mockVMsClient.EXPECT().WaitForUpdateResult(gomock.Any(), gomock.Any(), testCloud.ResourceGroup, gomock.Any()).Return(nil).AnyTimes()
+
+		mockFutureParser := testCloud.common.futureParser.(*MockFutureParser)
+		mockFutureParser.EXPECT().ConfigAccepted(gomock.Any()).Return(true).AnyTimes()
+	}
+
 	maxShare := int32(1)
 	goodInstanceID := fmt.Sprintf("/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/%s", "vm1")
 	diskEncryptionSetID := fmt.Sprintf("/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Compute/diskEncryptionSets/%s", "diskEncryptionSet-name")
 	testTags := make(map[string]*string)
 	testTags[WriteAcceleratorEnabled] = to.StringPtr("true")
 	testCases := []struct {
-		desc            string
-		diskName        string
-		existedDisk     *compute.Disk
-		nodeName        types.NodeName
-		vmList          map[string]string
-		isDataDisksFull bool
-		isBadDiskURI    bool
-		isDiskUsed      bool
-		isLunChUsed     bool
-		expectedErr     bool
-		expectedLun     int32
+		desc                 string
+		diskName             string
+		existedDisk          *compute.Disk
+		nodeName             types.NodeName
+		vmList               map[string]string
+		isDataDisksFull      bool
+		isBadDiskURI         bool
+		isDiskUsed           bool
+		isLunChUsed          bool
+		setup                func(testCloud *Cloud, expectedVMs []compute.VirtualMachine)
+		expectErr            bool
+		isAcceptedErr        bool
+		isContextDeadlineErr bool
+		expectedLun          int32
+		contextDuration      time.Duration
 	}{
 		{
 			desc:        "correct LUN and no error shall be returned if disk is nil",
@@ -74,7 +107,8 @@ func TestCommonAttachDisk(t *testing.T) {
 			diskName:    "disk-name",
 			existedDisk: nil,
 			expectedLun: 3,
-			expectedErr: false,
+			expectErr:   false,
+			setup:       defaultSetup,
 		},
 		{
 			desc:        "LUN -1 and error shall be returned if there's no such instance corresponding to given nodeName",
@@ -82,7 +116,8 @@ func TestCommonAttachDisk(t *testing.T) {
 			diskName:    "disk-name",
 			existedDisk: &compute.Disk{Name: to.StringPtr("disk-name")},
 			expectedLun: -1,
-			expectedErr: true,
+			expectErr:   true,
+			setup:       defaultSetup,
 		},
 		{
 			desc:            "LUN -1 and error shall be returned if there's no available LUN for instance",
@@ -92,7 +127,8 @@ func TestCommonAttachDisk(t *testing.T) {
 			diskName:        "disk-name",
 			existedDisk:     &compute.Disk{Name: to.StringPtr("disk-name")},
 			expectedLun:     -1,
-			expectedErr:     true,
+			expectErr:       true,
+			setup:           defaultSetup,
 		},
 		{
 			desc:        "correct LUN and no error shall be returned if everything is good",
@@ -108,7 +144,8 @@ func TestCommonAttachDisk(t *testing.T) {
 				},
 				Tags: testTags},
 			expectedLun: 3,
-			expectedErr: false,
+			expectErr:   false,
+			setup:       defaultSetup,
 		},
 		{
 			desc:     "early assigned lun value should be available via lun channel if lun channel is given",
@@ -123,7 +160,8 @@ func TestCommonAttachDisk(t *testing.T) {
 				},
 				Tags: testTags},
 			expectedLun: 3,
-			expectedErr: false,
+			expectErr:   false,
+			setup:       defaultSetup,
 		},
 		{
 			desc:     "an error shall be returned if disk state is not Unattached",
@@ -138,7 +176,8 @@ func TestCommonAttachDisk(t *testing.T) {
 				},
 				Tags: testTags},
 			expectedLun: -1,
-			expectedErr: true,
+			expectErr:   true,
+			setup:       defaultSetup,
 		},
 		{
 			desc:        "an error shall be returned if attach an already attached disk with good ManagedBy instance id",
@@ -147,62 +186,146 @@ func TestCommonAttachDisk(t *testing.T) {
 			diskName:    "disk-name",
 			existedDisk: &compute.Disk{Name: to.StringPtr("disk-name"), ManagedBy: to.StringPtr(goodInstanceID), DiskProperties: &compute.DiskProperties{MaxShares: &maxShare}},
 			expectedLun: -1,
-			expectedErr: true,
+			expectErr:   true,
+			setup:       defaultSetup,
 		},
 		{
-			desc:        "an error shall be returned if attach an already attached disk with bad ManagedBy instance id",
+			desc:        "should return an accepted error type when storage configuration was accepted but wait fails with an error",
 			vmList:      map[string]string{"vm1": "PowerState/Running"},
 			nodeName:    "vm1",
 			diskName:    "disk-name",
-			existedDisk: &compute.Disk{Name: to.StringPtr("disk-name"), ManagedBy: to.StringPtr("test"), DiskProperties: &compute.DiskProperties{MaxShares: &maxShare}},
+			existedDisk: nil,
 			expectedLun: -1,
-			expectedErr: true,
+			expectErr:   true,
+			setup: func(testCloud *Cloud, expectedVMs []compute.VirtualMachine) {
+				initVM(testCloud, expectedVMs)
+				mockVMsClient := testCloud.VirtualMachinesClient.(*mockvmclient.MockInterface)
+				mockVMsClient.EXPECT().UpdateAsync(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&azure.Future{}, nil)
+				mockVMsClient.EXPECT().WaitForUpdateResult(gomock.Any(), gomock.Any(), testCloud.ResourceGroup, gomock.Any()).Return(conflictingUserInputError)
+
+				mockFutureParser := testCloud.common.futureParser.(*MockFutureParser)
+				mockFutureParser.EXPECT().ConfigAccepted(gomock.Any()).Return(true).AnyTimes()
+			},
+			isAcceptedErr: true,
+		},
+		{
+			desc:        "should not return a accepted error type when storage configuration was not accepted",
+			vmList:      map[string]string{"vm1": "PowerState/Running"},
+			nodeName:    "vm1",
+			diskName:    "disk-name",
+			existedDisk: nil,
+			expectedLun: -1,
+			expectErr:   true,
+			setup: func(testCloud *Cloud, expectedVMs []compute.VirtualMachine) {
+				initVM(testCloud, expectedVMs)
+				mockVMsClient := testCloud.VirtualMachinesClient.(*mockvmclient.MockInterface)
+				mockVMsClient.EXPECT().UpdateAsync(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&azure.Future{}, nil)
+				mockVMsClient.EXPECT().WaitForUpdateResult(gomock.Any(), gomock.Any(), testCloud.ResourceGroup, gomock.Any()).Return(conflictingUserInputError)
+
+				mockFutureParser := testCloud.common.futureParser.(*MockFutureParser)
+				mockFutureParser.EXPECT().ConfigAccepted(gomock.Any()).Return(false).AnyTimes()
+			},
+		},
+		{
+			desc:        "should retry on OperationPreempted error and succeed",
+			vmList:      map[string]string{"vm1": "PowerState/Running"},
+			nodeName:    "vm1",
+			diskName:    "disk-name",
+			existedDisk: nil,
+			expectedLun: 3,
+			expectErr:   false,
+			setup: func(testCloud *Cloud, expectedVMs []compute.VirtualMachine) {
+				initVM(testCloud, expectedVMs)
+				mockVMsClient := testCloud.VirtualMachinesClient.(*mockvmclient.MockInterface)
+				mockVMsClient.EXPECT().UpdateAsync(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&azure.Future{}, nil).AnyTimes()
+				preempted := mockVMsClient.EXPECT().WaitForUpdateResult(gomock.Any(), gomock.Any(), testCloud.ResourceGroup, gomock.Any()).Return(operationPreemptedError)
+				success := mockVMsClient.EXPECT().WaitForUpdateResult(gomock.Any(), gomock.Any(), testCloud.ResourceGroup, gomock.Any()).Return(nil)
+
+				gomock.InOrder(preempted, success)
+
+				mockFutureParser := testCloud.common.futureParser.(*MockFutureParser)
+				mockFutureParser.EXPECT().ConfigAccepted(gomock.Any()).Return(true).AnyTimes()
+			},
+		},
+		{
+			desc:        "should retry on OperationPreempted error until context deadline and return context.DeadlineExceeded error",
+			vmList:      map[string]string{"vm1": "PowerState/Running"},
+			nodeName:    "vm1",
+			diskName:    "disk-name",
+			existedDisk: nil,
+			expectedLun: -1,
+			expectErr:   true,
+			setup: func(testCloud *Cloud, expectedVMs []compute.VirtualMachine) {
+				initVM(testCloud, expectedVMs)
+				mockVMsClient := testCloud.VirtualMachinesClient.(*mockvmclient.MockInterface)
+				mockVMsClient.EXPECT().UpdateAsync(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&azure.Future{}, nil).AnyTimes()
+				mockVMsClient.EXPECT().WaitForUpdateResult(gomock.Any(), gomock.Any(), testCloud.ResourceGroup, gomock.Any()).Return(operationPreemptedError).AnyTimes()
+
+				mockFutureParser := testCloud.common.futureParser.(*MockFutureParser)
+				mockFutureParser.EXPECT().ConfigAccepted(gomock.Any()).Return(true).AnyTimes()
+			},
+			contextDuration:      time.Duration(10 * time.Second),
+			isContextDeadlineErr: true,
 		},
 	}
 
 	for i, test := range testCases {
-		testCloud := GetTestCloud(ctrl)
-		diskURI := fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Compute/disks/%s",
-			testCloud.SubscriptionID, testCloud.ResourceGroup, test.diskName)
-		if test.isBadDiskURI {
-			diskURI = fmt.Sprintf("/baduri/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Compute/disks/%s",
+		tt := test
+		t.Run(tt.desc, func(t *testing.T) {
+			testCloud := GetTestCloud(ctrl)
+			diskURI := fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Compute/disks/%s",
 				testCloud.SubscriptionID, testCloud.ResourceGroup, test.diskName)
-		}
-		expectedVMs := setTestVirtualMachines(testCloud, test.vmList, test.isDataDisksFull)
-		if test.isDiskUsed {
-			vm0 := setTestVirtualMachines(testCloud, map[string]string{"vm0": "PowerState/Running"}, test.isDataDisksFull)[0]
-			expectedVMs = append(expectedVMs, vm0)
-		}
-		mockVMsClient := testCloud.VirtualMachinesClient.(*mockvmclient.MockInterface)
-		for _, vm := range expectedVMs {
-			mockVMsClient.EXPECT().Get(gomock.Any(), testCloud.ResourceGroup, *vm.Name, gomock.Any()).Return(vm, nil).AnyTimes()
-		}
-		if len(expectedVMs) == 0 {
-			mockVMsClient.EXPECT().Get(gomock.Any(), testCloud.ResourceGroup, gomock.Any(), gomock.Any()).Return(compute.VirtualMachine{}, &retry.Error{HTTPStatusCode: http.StatusNotFound, RawError: cloudprovider.InstanceNotFound}).AnyTimes()
-		}
-		mockVMsClient.EXPECT().Update(gomock.Any(), testCloud.ResourceGroup, gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		mockVMsClient.EXPECT().UpdateAsync(gomock.Any(), testCloud.ResourceGroup, gomock.Any(), gomock.Any(), gomock.Any()).Return(&azure.Future{}, nil).AnyTimes()
-		mockVMsClient.EXPECT().WaitForUpdateResult(gomock.Any(), gomock.Any(), testCloud.ResourceGroup, gomock.Any()).Return(nil).AnyTimes()
+			if tt.isBadDiskURI {
+				diskURI = fmt.Sprintf("/baduri/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Compute/disks/%s",
+					testCloud.SubscriptionID, testCloud.ResourceGroup, tt.diskName)
+			}
+			expectedVMs := setTestVirtualMachines(testCloud, tt.vmList, tt.isDataDisksFull)
+			if tt.isDiskUsed {
+				vm0 := setTestVirtualMachines(testCloud, map[string]string{"vm0": "PowerState/Running"}, tt.isDataDisksFull)[0]
+				expectedVMs = append(expectedVMs, vm0)
+			}
+			if tt.setup != nil {
+				tt.setup(testCloud, expectedVMs)
+			}
 
-		complete := make(chan bool)
-		defer close(complete)
-		if test.isLunChUsed {
-			lunCh := make(chan int32, 1)
-			oldCtx := ctx
-			ctx = context.WithValue(ctx, LunChannelContextKey, lunCh)
-			go func() {
-				t.Run("listen to lun channel", func(t *testing.T) {
-					lun := <-lunCh
-					assert.Equal(t, test.expectedLun, lun)
+			if tt.contextDuration > 0 {
+				oldCtx := ctx
+				ctx, cancel = context.WithTimeout(oldCtx, tt.contextDuration)
+				defer cancel()
+				defer func() {
 					ctx = oldCtx
-				})
-			}()
-		}
+				}()
+			}
 
-		lun, err := testCloud.AttachDisk(ctx, true, "", diskURI, test.nodeName, compute.CachingTypesReadOnly, test.existedDisk)
+			complete := make(chan bool)
+			defer close(complete)
+			if tt.isLunChUsed {
+				lunCh := make(chan int32, 1)
+				oldCtx := ctx
+				ctx = context.WithValue(ctx, LunChannelContextKey, lunCh)
+				go func() {
+					t.Run("listen to lun channel", func(t *testing.T) {
+						lun := <-lunCh
+						assert.Equal(t, tt.expectedLun, lun)
+						ctx = oldCtx
+					})
+				}()
+			}
 
-		assert.Equal(t, test.expectedLun, lun, "TestCase[%d]: %s", i, test.desc)
-		assert.Equal(t, test.expectedErr, err != nil, "TestCase[%d]: %s, return error: %v", i, test.desc, err)
+			lun, err := testCloud.AttachDisk(ctx, true, "", diskURI, tt.nodeName, compute.CachingTypesReadOnly, tt.existedDisk)
+
+			assert.Equal(t, tt.expectedLun, lun, "TestCase[%d]: %s", i, tt.desc)
+			assert.Equal(t, tt.expectErr, err != nil, "TestCase[%d]: %s, return error: %v", i, tt.desc, err)
+
+			if tt.isAcceptedErr {
+				assert.IsType(t, &retry.PartialUpdateError{}, err)
+			} else {
+				_, ok := err.(*retry.PartialUpdateError)
+				assert.False(t, ok, "the returned error should not be AcceptedError type")
+			}
+
+			assert.Equal(t, tt.isContextDeadlineErr, errors.Is(err, context.DeadlineExceeded))
+		})
 	}
 }
 
@@ -854,5 +977,77 @@ func TestIsInstanceNotFoundError(t *testing.T) {
 	for i, test := range testCases {
 		result := isInstanceNotFoundError(fmt.Errorf(test.errMsg))
 		assert.Equal(t, test.expectedResult, result, "TestCase[%d]", i, result)
+	}
+}
+
+func TestGetErrorCode(t *testing.T) {
+	testCases := []struct {
+		desc           string
+		err            error
+		expectedResult string
+	}{
+		{
+			desc:           "should return OperationPreempted",
+			err:            operationPreemptedError.Error(),
+			expectedResult: consts.OperationPreemptedErrorCode,
+		},
+		{
+			desc:           "should return VMExtensionprovisioning",
+			err:            vmExtensionProvisioningError.Error(),
+			expectedResult: "VMExtensionProvisioningError",
+		},
+		{
+			desc:           "should return ConflictingUserInput",
+			err:            conflictingUserInputError.Error(),
+			expectedResult: "ConflictingUserInput",
+		},
+	}
+	for i, test := range testCases {
+		tt := test
+		t.Run(tt.desc, func(t *testing.T) {
+			result := getErrorCode(test.err)
+			assert.Equal(t, test.expectedResult, *result, "TestCase[%d]", i, result)
+		})
+	}
+}
+
+func TestVmUpdateRequired(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	azCloud := GetTestCloud(ctrl)
+
+	testCases := []struct {
+		desc           string
+		configAccepted bool
+		err            error
+		expectedResult bool
+	}{
+		{
+			desc:           "should return true if OperationPreemption error is returned with a http status code 2xx",
+			configAccepted: true,
+			err:            operationPreemptedError.Error(),
+			expectedResult: true,
+		},
+		{
+			desc:           "should return false if OperationPreemption error is returned with a http status code != 2xx",
+			configAccepted: false,
+			err:            operationPreemptedError.Error(),
+			expectedResult: false,
+		},
+		{
+			desc:           "should return false if ConflictingUserInputError error is returned even if http status code == 2xx",
+			configAccepted: true,
+			err:            conflictingUserInputError.Error(),
+			expectedResult: false,
+		},
+	}
+	for i, test := range testCases {
+		tt := test
+		t.Run(tt.desc, func(t *testing.T) {
+			azCloud.common.futureParser.(*MockFutureParser).EXPECT().ConfigAccepted(gomock.Any()).Return(test.configAccepted)
+			result := azCloud.vmUpdateRequired(&azure.Future{}, test.err)
+			assert.Equalf(t, test.expectedResult, result, "TestCase[%d] returned %v", i, result)
+		})
 	}
 }

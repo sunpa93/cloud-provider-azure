@@ -134,7 +134,7 @@ var (
 			options:         defaultProcessorOptions,
 		},
 		{
-			description:     "[Failure] Error mutiple values - race",
+			description:     "[Failure] Error multiple values - race",
 			numValues:       10,
 			processDuration: 100 * time.Millisecond,
 			timeout:         1 * time.Minute,
@@ -143,7 +143,7 @@ var (
 			options:         defaultProcessorOptions,
 		},
 		{
-			description:     "[Failure] Error mutiple values - 20ms/value",
+			description:     "[Failure] Error multiple values - 20ms/value",
 			numValues:       10,
 			valuesRate:      20 * time.Millisecond,
 			processDuration: 100 * time.Millisecond,
@@ -161,7 +161,7 @@ var (
 			options:         defaultProcessorOptions,
 		},
 		{
-			description:     "[Failure] Timeout mutiple values - race",
+			description:     "[Failure] Timeout multiple values - race",
 			numValues:       10,
 			processDuration: 200 * time.Millisecond,
 			timeout:         100 * time.Millisecond,
@@ -169,7 +169,7 @@ var (
 			options:         defaultProcessorOptions,
 		},
 		{
-			description:     "[Failure] Timeout mutiple values - 40ms/value",
+			description:     "[Failure] Timeout multiple values - 40ms/value",
 			numValues:       10,
 			valuesRate:      40 * time.Millisecond,
 			processDuration: 200 * time.Millisecond,
