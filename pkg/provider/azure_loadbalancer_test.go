@@ -28,7 +28,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2021-12-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-03-01/compute"
 	"github.com/Azure/azure-sdk-for-go/services/network/mgmt/2021-08-01/network"
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/golang/mock/gomock"
@@ -690,12 +690,12 @@ func TestEnsureLoadBalancerDeleted(t *testing.T) {
 		flipService       bool
 	}{
 		{
-			desc:        "exteral service then flipped to internal should be created and deleted successfully",
+			desc:        "external service then flipped to internal should be created and deleted successfully",
 			service:     getTestService("service1", v1.ProtocolTCP, nil, false, 80),
 			flipService: true,
 		},
 		{
-			desc:          "interal service then flipped to external should be created and deleted successfully",
+			desc:          "internal service then flipped to external should be created and deleted successfully",
 			service:       getInternalTestService("service2", 80),
 			isInternalSvc: true,
 			flipService:   true,
@@ -961,7 +961,7 @@ func TestServiceOwnsPublicIP(t *testing.T) {
 		t.Run(c.desc, func(t *testing.T) {
 			service := getTestService(c.serviceName, v1.ProtocolTCP, nil, false, 80)
 			if c.serviceLBIP != "" {
-				service.Spec.LoadBalancerIP = c.serviceLBIP
+				setServiceLoadBalancerIP(&service, c.serviceLBIP)
 			}
 			owns, isUserAssignedPIP := serviceOwnsPublicIP(&service, c.pip, c.clusterName)
 			assert.Equal(t, c.expectedOwns, owns, "TestCase[%d]: %s", i, c.desc)
@@ -2008,34 +2008,36 @@ func TestIsFrontendIPChanged(t *testing.T) {
 		},
 	}
 
-	for i, test := range testCases {
-		az := GetTestCloud(ctrl)
-		mockSubnetsClient := az.SubnetsClient.(*mocksubnetclient.MockInterface)
-		mockSubnetsClient.EXPECT().Get(gomock.Any(), "rg", "vnet", "testSubnet", "").Return(test.existingSubnet, nil).AnyTimes()
-		mockSubnetsClient.EXPECT().CreateOrUpdate(gomock.Any(), "rg", "vnet", "testSubnet", test.existingSubnet).Return(nil)
-		err := az.SubnetsClient.CreateOrUpdate(context.TODO(), "rg", "vnet", "testSubnet", test.existingSubnet)
-		if err != nil {
-			t.Fatalf("TestCase[%d] meets unexpected error: %v", i, err)
-		}
-
-		mockPIPsClient := az.PublicIPAddressesClient.(*mockpublicipclient.MockInterface)
-		mockPIPsClient.EXPECT().CreateOrUpdate(gomock.Any(), "rg", gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		for _, existingPIP := range test.existingPIPs {
-			mockPIPsClient.EXPECT().Get(gomock.Any(), "rg", *existingPIP.Name, gomock.Any()).Return(existingPIP, nil).AnyTimes()
-			err := az.PublicIPAddressesClient.CreateOrUpdate(context.TODO(), "rg", *existingPIP.Name, existingPIP)
+	for _, test := range testCases {
+		t.Run(test.desc, func(t *testing.T) {
+			az := GetTestCloud(ctrl)
+			mockSubnetsClient := az.SubnetsClient.(*mocksubnetclient.MockInterface)
+			mockSubnetsClient.EXPECT().Get(gomock.Any(), "rg", "vnet", "testSubnet", "").Return(test.existingSubnet, nil).AnyTimes()
+			mockSubnetsClient.EXPECT().CreateOrUpdate(gomock.Any(), "rg", "vnet", "testSubnet", test.existingSubnet).Return(nil)
+			err := az.SubnetsClient.CreateOrUpdate(context.TODO(), "rg", "vnet", "testSubnet", test.existingSubnet)
 			if err != nil {
-				t.Fatalf("TestCase[%d] meets unexpected error: %v", i, err)
+				t.Fatal(err)
 			}
-		}
-		test.service.Spec.LoadBalancerIP = test.loadBalancerIP
-		test.service.Annotations[consts.ServiceAnnotationLoadBalancerInternalSubnet] = test.annotations
-		flag, rerr := az.isFrontendIPChanged("testCluster", test.config,
-			&test.service, test.lbFrontendIPConfigName, &test.existingPIPs)
-		if rerr != nil {
-			fmt.Println(rerr.Error())
-		}
-		assert.Equal(t, test.expectedFlag, flag, "TestCase[%d]: %s", i, test.desc)
-		assert.Equal(t, test.expectedError, rerr != nil, "TestCase[%d]: %s", i, test.desc)
+
+			mockPIPsClient := az.PublicIPAddressesClient.(*mockpublicipclient.MockInterface)
+			mockPIPsClient.EXPECT().CreateOrUpdate(gomock.Any(), "rg", gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			for _, existingPIP := range test.existingPIPs {
+				mockPIPsClient.EXPECT().Get(gomock.Any(), "rg", *existingPIP.Name, gomock.Any()).Return(existingPIP, nil).AnyTimes()
+				err := az.PublicIPAddressesClient.CreateOrUpdate(context.TODO(), "rg", *existingPIP.Name, existingPIP)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			setServiceLoadBalancerIP(&test.service, test.loadBalancerIP)
+			test.service.Annotations[consts.ServiceAnnotationLoadBalancerInternalSubnet] = test.annotations
+			flag, rerr := az.isFrontendIPChanged("testCluster", test.config,
+				&test.service, test.lbFrontendIPConfigName, &test.existingPIPs)
+			if rerr != nil {
+				fmt.Println(rerr.Error())
+			}
+			assert.Equal(t, test.expectedFlag, flag)
+			assert.Equal(t, test.expectedError, rerr != nil)
+		})
 	}
 }
 
@@ -2082,7 +2084,7 @@ func TestDeterminePublicIPName(t *testing.T) {
 	for i, test := range testCases {
 		az := GetTestCloud(ctrl)
 		service := getTestService("test1", v1.ProtocolTCP, nil, false, 80)
-		service.Spec.LoadBalancerIP = test.loadBalancerIP
+		setServiceLoadBalancerIP(&service, test.loadBalancerIP)
 
 		mockPIPsClient := az.PublicIPAddressesClient.(*mockpublicipclient.MockInterface)
 		mockPIPsClient.EXPECT().List(gomock.Any(), "rg").Return(test.existingPIPs, nil).MaxTimes(1)
@@ -3055,7 +3057,7 @@ func TestReconcileLoadBalancer(t *testing.T) {
 		clusterResources, expectedInterfaces, expectedVirtualMachines := getClusterResources(az, 3, 3)
 		setMockEnv(az, ctrl, expectedInterfaces, expectedVirtualMachines, 1)
 
-		test.service.Spec.LoadBalancerIP = "1.2.3.4"
+		setServiceLoadBalancerIP(&test.service, "1.2.3.4")
 
 		err := az.PublicIPAddressesClient.CreateOrUpdate(context.TODO(), "rg", "pipName", network.PublicIPAddress{
 			Name: to.StringPtr("pipName"),
@@ -4623,7 +4625,7 @@ func TestUnbindServiceFromPIP(t *testing.T) {
 	}
 	serviceName := "ns2/svc2"
 	service := getTestService(serviceName, v1.ProtocolTCP, nil, false, 80)
-	service.Spec.LoadBalancerIP = "1.2.3.4"
+	setServiceLoadBalancerIP(&service, "1.2.3.4")
 	expectedTags := []map[string]*string{
 		nil,
 		{consts.ServiceTagKey: to.StringPtr("")},
@@ -5197,7 +5199,7 @@ func TestReconcileZonesForFrontendIPConfigs(t *testing.T) {
 		regionZonesMap            map[string][]string
 		expectedZones             *[]string
 		expectedDirty             bool
-		expectedIP                string
+		expectedIP                *string
 		expectedErr               error
 	}{
 		{
@@ -5271,14 +5273,25 @@ func TestReconcileZonesForFrontendIPConfigs(t *testing.T) {
 			expectedDirty: true,
 		},
 		{
-			description: "reconcileFrontendIPConfigs should reuse the existing private IP for internal services",
+			description: "reconcileFrontendIPConfigs should reuse the existing private IP for internal services when subnet does not change",
 			service:     getInternalTestService("test", 80),
 			status: &v1.LoadBalancerStatus{
 				Ingress: []v1.LoadBalancerIngress{
 					{IP: "1.2.3.4"},
 				},
 			},
-			expectedIP:    "1.2.3.4",
+			expectedIP:    to.StringPtr("1.2.3.4"),
+			expectedDirty: true,
+		},
+		{
+			description: "reconcileFrontendIPConfigs should not reuse the existing private IP for internal services when subnet changes",
+			service:     getInternalTestService("test", 80),
+			status: &v1.LoadBalancerStatus{
+				Ingress: []v1.LoadBalancerIngress{
+					{IP: "1.2.3.6"},
+				},
+			},
+			expectedIP:    to.StringPtr(""),
 			expectedDirty: true,
 		},
 	} {
@@ -5296,7 +5309,8 @@ func TestReconcileZonesForFrontendIPConfigs(t *testing.T) {
 			mockPIPClient.EXPECT().CreateOrUpdate(gomock.Any(), "rg", gomock.Any(), gomock.Any()).Return(nil).MaxTimes(1)
 
 			subnetClient := cloud.SubnetsClient.(*mocksubnetclient.MockInterface)
-			subnetClient.EXPECT().Get(gomock.Any(), "rg", "vnet", "subnet", gomock.Any()).Return(network.Subnet{}, nil).MaxTimes(1)
+			subnetClient.EXPECT().Get(gomock.Any(), "rg", "vnet", "subnet", gomock.Any()).Return(
+				network.Subnet{SubnetPropertiesFormat: &network.SubnetPropertiesFormat{AddressPrefix: to.StringPtr("1.2.3.4/31")}}, nil).MaxTimes(1)
 
 			zoneClient := mockzoneclient.NewMockInterface(ctrl)
 			zoneClient.EXPECT().GetZones(gomock.Any(), gomock.Any()).Return(map[string][]string{}, tc.getZoneError).MaxTimes(1)
@@ -5317,9 +5331,13 @@ func TestReconcileZonesForFrontendIPConfigs(t *testing.T) {
 				}
 			}
 
-			if tc.expectedIP != "" {
-				assert.Equal(t, network.IPAllocationMethodStatic, (*lb.FrontendIPConfigurations)[0].PrivateIPAllocationMethod)
-				assert.Equal(t, tc.expectedIP, to.String((*lb.FrontendIPConfigurations)[0].PrivateIPAddress))
+			if tc.expectedIP != nil {
+				assert.Equal(t, *tc.expectedIP, to.String((*lb.FrontendIPConfigurations)[0].PrivateIPAddress))
+				if *tc.expectedIP != "" {
+					assert.Equal(t, network.IPAllocationMethodStatic, (*lb.FrontendIPConfigurations)[0].PrivateIPAllocationMethod)
+				} else {
+					assert.Equal(t, network.IPAllocationMethodDynamic, (*lb.FrontendIPConfigurations)[0].PrivateIPAllocationMethod)
+				}
 			}
 		})
 	}
