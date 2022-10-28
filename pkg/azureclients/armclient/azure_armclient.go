@@ -76,14 +76,14 @@ func sender() autorest.Sender {
 				Timeout:   30 * time.Second, // the same as default transport
 				KeepAlive: 30 * time.Second, // the same as default transport
 			}).DialContext,
-			ForceAttemptHTTP2:     true,             // always attempt HTTP/2 even though custom dialer is provided
+			ForceAttemptHTTP2:     false,            // We disable HTTP/2 (which allows sharing connections) to get better distribution of requests across ARM front-end machines. ref:https://cs.opensource.google/go/go/+/refs/tags/go1.19:src/net/http/transport.go;l=1062
 			MaxIdleConns:          100,              // Zero means no limit, the same as default transport
 			MaxIdleConnsPerHost:   100,              // Default is 2, ref:https://cs.opensource.google/go/go/+/go1.18.4:src/net/http/transport.go;l=58
 			IdleConnTimeout:       90 * time.Second, // the same as default transport
 			TLSHandshakeTimeout:   10 * time.Second, // the same as default transport
 			ExpectContinueTimeout: 1 * time.Second,  // the same as default transport
 			TLSClientConfig: &tls.Config{
-				MinVersion:    tls.VersionTLS12,     //force to use TLS 1.2
+				MinVersion:    tls.VersionTLS12,     // force to use TLS 1.2
 				Renegotiation: tls.RenegotiateNever, // the same as default transport https://pkg.go.dev/crypto/tls#RenegotiationSupport
 			},
 		}
