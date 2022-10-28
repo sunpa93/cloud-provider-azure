@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2021-12-01/compute"
+	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-03-01/compute"
 	"github.com/Azure/azure-sdk-for-go/services/network/mgmt/2021-08-01/network"
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/golang/mock/gomock"
@@ -1846,24 +1846,7 @@ func TestEnsureBackendPoolDeletedVmssFlex(t *testing.T) {
 			expectedErr:                    nil,
 		},
 		{
-			description:                    "EnsureBackendPoolDeleted should return error if vmss update fails",
-			service:                        &v1.Service{},
-			vmSetName:                      "vmssflex1",
-			backendPoolID:                  testBackendPoolID0,
-			backendAddressPools:            testBackendPools,
-			deleteFromVMSet:                true,
-			isStandardLB:                   true,
-			useMultipleSLBs:                false,
-			testVMListWithoutInstanceView:  testVMListWithoutInstanceView,
-			testVMListWithOnlyInstanceView: testVMListWithOnlyInstanceView,
-			vmListErr:                      nil,
-			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded),
-			nicGetErr:                      nil,
-			vmssPutErr:                     &retry.Error{RawError: fmt.Errorf("failed to update nic")},
-			expectedErr:                    fmt.Errorf("Retriable: false, RetryAfter: 0s, HTTPStatusCode: 0, RawError: failed to update nic"),
-		},
-		{
-			description:                    "EnsureBackendPoolDeleted should return error if vmss update fails",
+			description:                    "EnsureBackendPoolDeleted should return error if nic update fails",
 			service:                        &v1.Service{},
 			vmSetName:                      "vmssflex1",
 			backendPoolID:                  testBackendPoolID0,
