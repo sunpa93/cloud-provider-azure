@@ -19,7 +19,6 @@ package provider
 import (
 	"fmt"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-03-01/compute"
@@ -955,19 +954,17 @@ func TestGetVmssVMByNodeIdentity(t *testing.T) {
 			mockVMSSVMClient := ss.cloud.VirtualMachineScaleSetVMsClient.(*mockvmssvmclient.MockInterface)
 			mockVMSSVMClient.EXPECT().List(gomock.Any(), ss.ResourceGroup, testVMSSName, gomock.Any()).Return(expectedVMSSVMs, nil).AnyTimes()
 
-			// Make some nil VMSS VM in cache.
-			cacheKey, cache, err := ss.getVMSSVMCache(ss.ResourceGroup, testVMSSName)
+			cacheKey := getVMSSVMCacheKey(ss.ResourceGroup, testVMSSName)
+			virtualMachines, err := ss.getVMSSVMsFromCache(ss.ResourceGroup, testVMSSName, azcache.CacheReadTypeDefault)
 			assert.Nil(t, err)
-			cached, err := cache.Get(cacheKey, azcache.CacheReadTypeDefault)
-			assert.Nil(t, err)
-			virtualMachines := cached.(*sync.Map)
 			for _, vm := range test.goneVMList {
-				entry := vmssVirtualMachinesEntry{
-					resourceGroup: ss.ResourceGroup,
-					vmssName:      testVMSSName,
+				entry := VMSSVirtualMachinesEntry{
+					ResourceGroup: ss.ResourceGroup,
+					VMSSName:      testVMSSName,
 				}
 				virtualMachines.Store(vm, &entry)
 			}
+			ss.vmssVMCache.Update(cacheKey, virtualMachines)
 
 			for i := 0; i < len(test.vmList); i++ {
 				node := nodeIdentity{ss.ResourceGroup, testVMSSName, test.vmList[i]}
@@ -981,11 +978,9 @@ func TestGetVmssVMByNodeIdentity(t *testing.T) {
 				assert.Equal(t, test.goneVMExpectedErr, err)
 			}
 
-			cacheKey, cache, err = ss.getVMSSVMCache(ss.ResourceGroup, testVMSSName)
+			virtualMachines, err = ss.getVMSSVMsFromCache(ss.ResourceGroup, testVMSSName, azcache.CacheReadTypeDefault)
 			assert.Nil(t, err)
-			cached, err = cache.Get(cacheKey, azcache.CacheReadTypeDefault)
-			assert.Nil(t, err)
-			virtualMachines = cached.(*sync.Map)
+
 			for _, vm := range test.goneVMList {
 				_, ok := virtualMachines.Load(vm)
 				assert.True(t, ok)
@@ -2470,7 +2465,7 @@ func TestEnsureBackendPoolDeletedFromVMSS(t *testing.T) {
 			expectedVMSS.VirtualMachineProfile = nil
 		}
 		mockVMSSClient := ss.cloud.VirtualMachineScaleSetsClient.(*mockvmssclient.MockInterface)
-		mockVMSSClient.EXPECT().List(gomock.Any(), ss.ResourceGroup).Return([]compute.VirtualMachineScaleSet{expectedVMSS}, nil).Times(2)
+		mockVMSSClient.EXPECT().List(gomock.Any(), ss.ResourceGroup).Return([]compute.VirtualMachineScaleSet{expectedVMSS}, nil).AnyTimes().MinTimes(1)
 		vmssPutTimes := 0
 		if test.expectedPutVMSS {
 			vmssPutTimes = 1
@@ -2592,8 +2587,11 @@ func TestEnsureBackendPoolDeleted(t *testing.T) {
 		mockVMsClient := ss.cloud.VirtualMachinesClient.(*mockvmclient.MockInterface)
 		mockVMsClient.EXPECT().List(gomock.Any(), gomock.Any()).Return([]compute.VirtualMachine{}, nil).AnyTimes()
 
-		err = ss.EnsureBackendPoolDeleted(&v1.Service{}, test.backendpoolID, testVMSSName, test.backendAddressPools, true)
+		updated, err := ss.EnsureBackendPoolDeleted(&v1.Service{}, test.backendpoolID, testVMSSName, test.backendAddressPools, true)
 		assert.Equal(t, test.expectedErr, err != nil, test.description+", but an error occurs")
+		if !test.expectedErr && test.expectedVMSSVMPutTimes > 0 {
+			assert.True(t, updated, test.description)
+		}
 	}
 }
 
@@ -2675,7 +2673,8 @@ func TestEnsureBackendPoolDeletedConcurrently(t *testing.T) {
 		i := i
 		id := id
 		testFunc = append(testFunc, func() error {
-			return ss.EnsureBackendPoolDeleted(&v1.Service{}, id, testVMSSNames[i], backendAddressPools, true)
+			_, err := ss.EnsureBackendPoolDeleted(&v1.Service{}, id, testVMSSNames[i], backendAddressPools, true)
+			return err
 		})
 	}
 	errs := utilerrors.AggregateGoroutines(testFunc...)

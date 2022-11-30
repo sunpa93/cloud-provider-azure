@@ -18,6 +18,7 @@ package provider
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	azcache "sigs.k8s.io/cloud-provider-azure/pkg/cache"
 	"sigs.k8s.io/cloud-provider-azure/pkg/consts"
 )
 
@@ -312,5 +314,93 @@ func TestRemoveDuplicatedSecurityRules(t *testing.T) {
 			rules = removeDuplicatedSecurityRules(rules)
 			assert.Equal(t, testCase.expected, rules)
 		})
+	}
+}
+
+func TestGetVMSSVMCacheKey(t *testing.T) {
+	tests := []struct {
+		description       string
+		resourceGroupName string
+		vmssName          string
+		cacheKey          string
+	}{
+		{
+			description:       "Resource group and Vmss Name are in lower case",
+			resourceGroupName: "resgrp",
+			vmssName:          "vmss",
+			cacheKey:          "resgrp/vmss",
+		},
+		{
+			description:       "Resource group has upper case and Vmss Name is in lower case",
+			resourceGroupName: "Resgrp",
+			vmssName:          "vmss",
+			cacheKey:          "resgrp/vmss",
+		},
+		{
+			description:       "Resource group is in lower case and Vmss Name has upper case",
+			resourceGroupName: "resgrp",
+			vmssName:          "Vmss",
+			cacheKey:          "resgrp/vmss",
+		},
+		{
+			description:       "Resource group and Vmss Name are both in upper case",
+			resourceGroupName: "Resgrp",
+			vmssName:          "Vmss",
+			cacheKey:          "resgrp/vmss",
+		},
+	}
+
+	for _, test := range tests {
+		result := getVMSSVMCacheKey(test.resourceGroupName, test.vmssName)
+		assert.Equal(t, result, test.cacheKey, test.description)
+	}
+}
+
+func TestIsNodeInVMSSVMCache(t *testing.T) {
+
+	getter := func(key string) (interface{}, error) {
+		return nil, nil
+	}
+	emptyCacheEntryTimedCache, _ := azcache.NewTimedcache(fakeCacheTTL, getter)
+	emptyCacheEntryTimedCache.Set("key", nil)
+
+	cacheEntryTimedCache, _ := azcache.NewTimedcache(fakeCacheTTL, getter)
+	syncMap := &sync.Map{}
+	syncMap.Store("node", nil)
+	cacheEntryTimedCache.Set("key", syncMap)
+
+	tests := []struct {
+		description    string
+		nodeName       string
+		vmssVMCache    *azcache.TimedCache
+		expectedResult bool
+	}{
+		{
+			description:    "nil cache",
+			vmssVMCache:    nil,
+			expectedResult: false,
+		},
+		{
+			description:    "empty CacheEntry timed cache",
+			vmssVMCache:    emptyCacheEntryTimedCache,
+			expectedResult: false,
+		},
+		{
+			description:    "node name in the cache",
+			nodeName:       "node",
+			vmssVMCache:    cacheEntryTimedCache,
+			expectedResult: true,
+		},
+		{
+			description:    "node name not in the cache",
+			nodeName:       "node2",
+			vmssVMCache:    cacheEntryTimedCache,
+			expectedResult: false,
+		},
+	}
+
+	for _, test := range tests {
+		result := isNodeInVMSSVMCache(test.nodeName, test.vmssVMCache)
+		assert.Equal(t, test.expectedResult, result, test.description)
 	}
 }
