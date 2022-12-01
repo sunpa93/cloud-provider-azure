@@ -355,7 +355,7 @@ func (c *controllerCommon) attachDiskBatchToNode(ctx context.Context, subscripti
 			Steps:    updateVMUpdateRetrySteps,
 		}
 
-		err = vmset.WaitForUpdateResult(resultCtx, future, resourceGroup, "attach_disk")
+		err = vmset.WaitForUpdateResult(resultCtx, future, nodeName, "attach_disk")
 	updateRetryLoop:
 		for c.vmUpdateRequired(future, err) {
 			select {
@@ -367,7 +367,7 @@ func (c *controllerCommon) attachDiskBatchToNode(ctx context.Context, subscripti
 			klog.V(2).Infof("Retry VM Update on node (%s) due to error (%v)", nodeName, err)
 			future, err = vmset.UpdateVMAsync(resultCtx, nodeName)
 			if err == nil {
-				err = vmset.WaitForUpdateResult(resultCtx, future, resourceGroup, "attach_disk")
+				err = vmset.WaitForUpdateResult(resultCtx, future, nodeName, "attach_disk")
 			}
 		}
 

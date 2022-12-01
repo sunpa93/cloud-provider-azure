@@ -19,6 +19,7 @@ package provider
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-03-01/compute"
@@ -43,40 +44,48 @@ func TestAttachDiskWithVMSS(t *testing.T) {
 	ctx, cancel := getContextWithCancel()
 	defer cancel()
 
+	diskname := "disk-name" //nolint: goconst
+
 	fakeStatusNotFoundVMSSName := types.NodeName("FakeStatusNotFoundVMSSName")
 	testCases := []struct {
-		desc           string
-		vmssName       types.NodeName
-		vmssvmName     types.NodeName
-		disks          []string
-		vmList         map[string]string
-		vmssVMList     []string
-		expectedErr    bool
-		expectedErrMsg error
+		desc            string
+		vmssName        types.NodeName
+		vmssvmName      types.NodeName
+		disks           []string
+		vmList          map[string]string
+		vmssVMList      []string
+		inconsistentLUN bool
+		expectedErr     error
 	}{
 		{
-			desc:        "no error shall be returned if everything is good with one managed disk",
-			vmssVMList:  []string{"vmss00-vm-000000", "vmss00-vm-000001", "vmss00-vm-000002"},
-			vmssName:    "vmss00",
-			vmssvmName:  "vmss00-vm-000000",
-			disks:       []string{"disk-name"},
-			expectedErr: false,
+			desc:       "no error shall be returned if everything is good with one managed disk",
+			vmssVMList: []string{"vmss00-vm-000000", "vmss00-vm-000001", "vmss00-vm-000002"},
+			vmssName:   "vmss00",
+			vmssvmName: "vmss00-vm-000000",
+			disks:      []string{"disk-name"},
 		},
 		{
-			desc:        "no error shall be returned if everything is good with 2 managed disks",
-			vmssVMList:  []string{"vmss00-vm-000000", "vmss00-vm-000001", "vmss00-vm-000002"},
-			vmssName:    "vmss00",
-			vmssvmName:  "vmss00-vm-000000",
-			disks:       []string{"disk-name", "disk-name2"},
-			expectedErr: false,
+			desc:       "no error shall be returned if everything is good with 2 managed disks",
+			vmssVMList: []string{"vmss00-vm-000000", "vmss00-vm-000001", "vmss00-vm-000002"},
+			vmssName:   "vmss00",
+			vmssvmName: "vmss00-vm-000000",
+			disks:      []string{"disk-name", "disk-name2"},
 		},
 		{
-			desc:        "no error shall be returned if everything is good with non-managed disk",
-			vmssVMList:  []string{"vmss00-vm-000000", "vmss00-vm-000001", "vmss00-vm-000002"},
-			vmssName:    "vmss00",
-			vmssvmName:  "vmss00-vm-000000",
-			disks:       []string{"disk-name"},
-			expectedErr: false,
+			desc:       "no error shall be returned if everything is good with non-managed disk",
+			vmssVMList: []string{"vmss00-vm-000000", "vmss00-vm-000001", "vmss00-vm-000002"},
+			vmssName:   "vmss00",
+			vmssvmName: "vmss00-vm-000000",
+			disks:      []string{"disk-name"},
+		},
+		{
+			desc:            "error should be returned when disk lun is inconsistent",
+			vmssVMList:      []string{"vmss00-vm-000000", "vmss00-vm-000001", "vmss00-vm-000002"},
+			vmssName:        "vmss00",
+			vmssvmName:      "vmss00-vm-000000",
+			disks:           []string{"disk-name", "disk-name2"},
+			inconsistentLUN: true,
+			expectedErr:     fmt.Errorf("disk(/subscriptions/subscription/resourceGroups/rg/providers/Microsoft.Compute/disks/disk-name) already attached to node(vmss00-vm-000000) on LUN(0), but target LUN is 63"),
 		},
 	}
 
@@ -108,6 +117,13 @@ func TestAttachDiskWithVMSS(t *testing.T) {
 				},
 				DataDisks: &[]compute.DataDisk{},
 			}
+			if test.inconsistentLUN {
+				diskURI := fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Compute/disks/%s",
+					testCloud.SubscriptionID, testCloud.ResourceGroup, diskname)
+				vmssvm.StorageProfile.DataDisks = &[]compute.DataDisk{
+					{Lun: to.Int32Ptr(0), Name: &diskname, ManagedDisk: &compute.ManagedDiskParameters{ID: &diskURI}},
+				}
+			}
 		}
 		mockVMSSVMClient := testCloud.VirtualMachineScaleSetVMsClient.(*mockvmssvmclient.MockInterface)
 		mockVMSSVMClient.EXPECT().List(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any()).Return(expectedVMSSVMs, nil).AnyTimes()
@@ -126,16 +142,16 @@ func TestAttachDiskWithVMSS(t *testing.T) {
 				diskEncryptionSetID:     "",
 				writeAcceleratorEnabled: true,
 			}
+			if test.inconsistentLUN {
+				options.lun = 63
+			}
 
 			diskURI := fmt.Sprintf("/subscriptions/%s/resourceGroups/%s/providers/Microsoft.Compute/disks/%s",
 				testCloud.SubscriptionID, testCloud.ResourceGroup, diskName)
 			diskMap[diskURI] = &options
 		}
 		_, err = ss.AttachDisk(ctx, test.vmssvmName, diskMap)
-		assert.Equal(t, test.expectedErr, err != nil, "TestCase[%d]: %s, return error: %v", i, test.desc, err)
-		if test.expectedErr {
-			assert.EqualError(t, test.expectedErrMsg, err.Error(), "TestCase[%d]: %s, expected error: %v, return error: %v", i, test.desc, test.expectedErrMsg, err)
-		}
+		assert.Equal(t, test.expectedErr, err, "TestCase[%d]: %s, expected error: %v, return error: %v", i, test.desc, test.expectedErr, err)
 	}
 }
 
@@ -203,7 +219,7 @@ func TestDetachDiskWithVMSS(t *testing.T) {
 	}
 
 	for i, test := range testCases {
-		scaleSetName := string(test.vmssName)
+		scaleSetName := strings.ToLower(string(test.vmssName))
 		ss, err := NewTestScaleSet(ctrl)
 		assert.NoError(t, err, test.desc)
 		testCloud := ss.cloud
@@ -215,7 +231,8 @@ func TestDetachDiskWithVMSS(t *testing.T) {
 		mockVMSSClient.EXPECT().CreateOrUpdate(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any()).Return(nil).MaxTimes(1)
 
 		expectedVMSSVMs, _, _ := buildTestVirtualMachineEnv(testCloud, scaleSetName, "", 0, test.vmssVMList, "succeeded", false)
-		for _, vmssvm := range expectedVMSSVMs {
+		var updatedVMSSVM *compute.VirtualMachineScaleSetVM
+		for itr, vmssvm := range expectedVMSSVMs {
 			vmssvm.StorageProfile = &compute.StorageProfile{
 				OsDisk: &compute.OSDisk{
 					Name: to.StringPtr("osdisk1"),
@@ -241,13 +258,17 @@ func TestDetachDiskWithVMSS(t *testing.T) {
 					},
 				},
 			}
+
+			if string(test.vmssvmName) == *vmssvm.VirtualMachineScaleSetVMProperties.OsProfile.ComputerName {
+				updatedVMSSVM = &expectedVMSSVMs[itr]
+			}
 		}
 		mockVMSSVMClient := testCloud.VirtualMachineScaleSetVMsClient.(*mockvmssvmclient.MockInterface)
 		mockVMSSVMClient.EXPECT().List(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any()).Return(expectedVMSSVMs, nil).AnyTimes()
-		if scaleSetName == string(fakeStatusNotFoundVMSSName) {
-			mockVMSSVMClient.EXPECT().Update(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any(), gomock.Any(), gomock.Any()).Return(&retry.Error{HTTPStatusCode: http.StatusNotFound, RawError: cloudprovider.InstanceNotFound}).AnyTimes()
+		if scaleSetName == strings.ToLower(string(fakeStatusNotFoundVMSSName)) {
+			mockVMSSVMClient.EXPECT().Update(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any(), gomock.Any(), gomock.Any()).Return(updatedVMSSVM, &retry.Error{HTTPStatusCode: http.StatusNotFound, RawError: cloudprovider.InstanceNotFound}).AnyTimes()
 		} else {
-			mockVMSSVMClient.EXPECT().Update(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			mockVMSSVMClient.EXPECT().Update(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any(), gomock.Any(), gomock.Any()).Return(updatedVMSSVM, nil).AnyTimes()
 		}
 
 		mockVMClient := testCloud.VirtualMachinesClient.(*mockvmclient.MockInterface)
@@ -328,7 +349,7 @@ func TestUpdateVMWithVMSS(t *testing.T) {
 	}
 
 	for i, test := range testCases {
-		scaleSetName := string(test.vmssName)
+		scaleSetName := strings.ToLower(string(test.vmssName))
 		ss, err := NewTestScaleSet(ctrl)
 		assert.NoError(t, err, test.desc)
 		testCloud := ss.cloud
@@ -340,7 +361,9 @@ func TestUpdateVMWithVMSS(t *testing.T) {
 		mockVMSSClient.EXPECT().CreateOrUpdate(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any()).Return(nil).MaxTimes(1)
 
 		expectedVMSSVMs, _, _ := buildTestVirtualMachineEnv(testCloud, scaleSetName, "", 0, test.vmssVMList, "succeeded", false)
-		for _, vmssvm := range expectedVMSSVMs {
+		var updatedVMSSVM *compute.VirtualMachineScaleSetVM
+
+		for itr, vmssvm := range expectedVMSSVMs {
 			vmssvm.StorageProfile = &compute.StorageProfile{
 				OsDisk: &compute.OSDisk{
 					Name: to.StringPtr("osdisk1"),
@@ -356,13 +379,17 @@ func TestUpdateVMWithVMSS(t *testing.T) {
 					Name: to.StringPtr(diskName),
 				}},
 			}
+
+			if string(test.vmssvmName) == *vmssvm.VirtualMachineScaleSetVMProperties.OsProfile.ComputerName {
+				updatedVMSSVM = &expectedVMSSVMs[itr]
+			}
 		}
 		mockVMSSVMClient := testCloud.VirtualMachineScaleSetVMsClient.(*mockvmssvmclient.MockInterface)
 		mockVMSSVMClient.EXPECT().List(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any()).Return(expectedVMSSVMs, nil).AnyTimes()
-		if scaleSetName == string(fakeStatusNotFoundVMSSName) {
-			mockVMSSVMClient.EXPECT().Update(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any(), gomock.Any(), gomock.Any()).Return(&retry.Error{HTTPStatusCode: http.StatusNotFound, RawError: cloudprovider.InstanceNotFound}).AnyTimes()
+		if scaleSetName == strings.ToLower(string(fakeStatusNotFoundVMSSName)) {
+			mockVMSSVMClient.EXPECT().Update(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any(), gomock.Any(), gomock.Any()).Return(updatedVMSSVM, &retry.Error{HTTPStatusCode: http.StatusNotFound, RawError: cloudprovider.InstanceNotFound}).AnyTimes()
 		} else {
-			mockVMSSVMClient.EXPECT().Update(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+			mockVMSSVMClient.EXPECT().Update(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any(), gomock.Any(), gomock.Any()).Return(updatedVMSSVM, nil).AnyTimes()
 		}
 
 		mockVMClient := testCloud.VirtualMachinesClient.(*mockvmclient.MockInterface)
@@ -458,9 +485,10 @@ func TestGetDataDisksWithVMSS(t *testing.T) {
 				}
 			}
 		}
+		updatedVMSSVM := &expectedVMSSVMs[0]
 		mockVMSSVMClient := testCloud.VirtualMachineScaleSetVMsClient.(*mockvmssvmclient.MockInterface)
 		mockVMSSVMClient.EXPECT().List(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any()).Return(expectedVMSSVMs, nil).AnyTimes()
-		mockVMSSVMClient.EXPECT().Update(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		mockVMSSVMClient.EXPECT().Update(gomock.Any(), testCloud.ResourceGroup, scaleSetName, gomock.Any(), gomock.Any(), gomock.Any()).Return(updatedVMSSVM, nil).AnyTimes()
 		dataDisks, _, err := ss.GetDataDisks(test.nodeName, test.crt)
 		assert.Equal(t, test.expectedDataDisks, dataDisks, "TestCase[%d]: %s", i, test.desc)
 		assert.Equal(t, test.expectedErr, err != nil, "TestCase[%d]: %s", i, test.desc)

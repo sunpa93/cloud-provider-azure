@@ -72,12 +72,12 @@ var (
 		},
 	}
 
-	testNic1 = generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded)
+	testNic1 = generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/testvm1")
 
-	testNic2 = generateTestNic("testvm2-nic", true, network.ProvisioningStateSucceeded)
+	testNic2 = generateTestNic("testvm2-nic", true, network.ProvisioningStateSucceeded, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/testvm2")
 )
 
-func generateTestNic(nicName string, isIPConfigurationsNil bool, provisioningState network.ProvisioningState) network.Interface {
+func generateTestNic(nicName string, isIPConfigurationsNil bool, provisioningState network.ProvisioningState, vmID string) network.Interface {
 	result := network.Interface{
 		ID:   to.StringPtr("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/" + nicName),
 		Name: to.StringPtr(nicName),
@@ -96,6 +96,9 @@ func generateTestNic(nicName string, isIPConfigurationsNil bool, provisioningSta
 				},
 			},
 			ProvisioningState: provisioningState,
+			VirtualMachine: &network.SubResource{
+				ID: to.StringPtr(vmID),
+			},
 		},
 	}
 	if isIPConfigurationsNil {
@@ -771,6 +774,7 @@ func TestGetNodeNameByIPConfigurationIDVmssFlex(t *testing.T) {
 		testVMListWithoutInstanceView  []compute.VirtualMachine
 		testVMListWithOnlyInstanceView []compute.VirtualMachine
 		vmListErr                      error
+		nic                            network.Interface
 		expectedNodeName               string
 		expectedVMSetName              string
 		expectedErr                    error
@@ -781,6 +785,7 @@ func TestGetNodeNameByIPConfigurationIDVmssFlex(t *testing.T) {
 			testVMListWithoutInstanceView:  testVMListWithoutInstanceView,
 			testVMListWithOnlyInstanceView: testVMListWithOnlyInstanceView,
 			vmListErr:                      nil,
+			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/testvm1"),
 			expectedNodeName:               "vmssflex1000001",
 			expectedVMSetName:              "vmssflex1",
 			expectedErr:                    nil,
@@ -791,6 +796,7 @@ func TestGetNodeNameByIPConfigurationIDVmssFlex(t *testing.T) {
 			testVMListWithoutInstanceView:  testVMListWithoutInstanceView,
 			testVMListWithOnlyInstanceView: testVMListWithOnlyInstanceView,
 			vmListErr:                      nil,
+			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded, fmt.Sprintf("/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/%s", nonExistingNodeName)),
 			expectedNodeName:               "",
 			expectedVMSetName:              "",
 			expectedErr:                    fmt.Errorf("failed to map VM Name to NodeName: VM Name NonExistingNodeName"),
@@ -817,6 +823,9 @@ func TestGetNodeNameByIPConfigurationIDVmssFlex(t *testing.T) {
 		mockVMClient := fs.VirtualMachinesClient.(*mockvmclient.MockInterface)
 		mockVMClient.EXPECT().ListVmssFlexVMsWithoutInstanceView(gomock.Any(), gomock.Any()).Return(tc.testVMListWithoutInstanceView, tc.vmListErr).AnyTimes()
 		mockVMClient.EXPECT().ListVmssFlexVMsWithOnlyInstanceView(gomock.Any(), gomock.Any()).Return(tc.testVMListWithOnlyInstanceView, tc.vmListErr).AnyTimes()
+
+		mockInterfacesClient := fs.InterfacesClient.(*mockinterfaceclient.MockInterface)
+		mockInterfacesClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(tc.nic, nil).AnyTimes()
 
 		nodeName, vmSetName, err := fs.GetNodeNameByIPConfigurationID(tc.ipConfigurationID)
 		assert.Equal(t, tc.expectedNodeName, nodeName)
@@ -1030,7 +1039,7 @@ func TestEnsureHostInPoolVmssFlex(t *testing.T) {
 			testVMListWithoutInstanceView:  testVMListWithoutInstanceView,
 			testVMListWithOnlyInstanceView: testVMListWithOnlyInstanceView,
 			vmListErr:                      nil,
-			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded),
+			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/testvm1"),
 			nicGetErr:                      nil,
 			expectedNodeResourceGroup:      "rg",
 			expectedVMSetName:              "vmssflex1",
@@ -1084,7 +1093,7 @@ func TestEnsureHostInPoolVmssFlex(t *testing.T) {
 			testVMListWithoutInstanceView:  testVMListWithoutInstanceView,
 			testVMListWithOnlyInstanceView: testVMListWithOnlyInstanceView,
 			vmListErr:                      nil,
-			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded),
+			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/testvm1"),
 			nicGetErr:                      nil,
 			nicPutErr:                      &retry.Error{RawError: fmt.Errorf("failed to update nic")},
 			expectedNodeResourceGroup:      "",
@@ -1103,7 +1112,7 @@ func TestEnsureHostInPoolVmssFlex(t *testing.T) {
 			testVMListWithoutInstanceView:  testVMListWithoutInstanceView,
 			testVMListWithOnlyInstanceView: testVMListWithOnlyInstanceView,
 			vmListErr:                      nil,
-			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateFailed),
+			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateFailed, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/testvm1"),
 			nicGetErr:                      nil,
 			nicPutErr:                      nil,
 			expectedNodeResourceGroup:      "",
@@ -1400,7 +1409,7 @@ func TestEnsureVMSSFlexInPool(t *testing.T) {
 			fs.EnableMultipleStandardLoadBalancers = true
 		}
 
-		testVmssFlex := genreteTestVmssFlex()
+		testVmssFlex := genreteTestVmssFlex("vmssflex1", testVmssFlex1ID)
 
 		if tc.isVMSSDeallocating {
 			testVmssFlex.ProvisioningState = to.StringPtr(consts.VirtualMachineScaleSetsDeallocating)
@@ -1526,7 +1535,7 @@ func TestEnsureHostsInPoolVmssFlex(t *testing.T) {
 		}
 
 		mockVMSSClient := fs.cloud.VirtualMachineScaleSetsClient.(*mockvmssclient.MockInterface)
-		mockVMSSClient.EXPECT().List(gomock.Any(), gomock.Any()).Return([]compute.VirtualMachineScaleSet{genreteTestVmssFlex()}, nil).AnyTimes()
+		mockVMSSClient.EXPECT().List(gomock.Any(), gomock.Any()).Return([]compute.VirtualMachineScaleSet{genreteTestVmssFlex("vmssflex1", testVmssFlex1ID)}, nil).AnyTimes()
 		mockVMSSClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).Return(testVmssFlex1, nil).AnyTimes()
 		mockVMSSClient.EXPECT().CreateOrUpdate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(tc.vmssPutErr).AnyTimes()
 
@@ -1552,95 +1561,104 @@ func TestEnsureBackendPoolDeletedFromVMSetsVmssFlex(t *testing.T) {
 	defer ctrl.Finish()
 
 	testCases := []struct {
-		description         string
-		vmssNamesMap        map[string]bool
-		backendPoolID       string
-		isVMSSDeallocating  bool
-		hasDefaultVMProfile bool
-		isNicConfigEmpty    bool
-		isIPConfigEmpty     bool
-		vmssPutErr          *retry.Error
-		expectedErr         error
+		description          string
+		vmssNamesMap         map[string]bool
+		backendPoolID        string
+		isVMSSDeallocating   bool
+		hasDefaultVMProfile  bool
+		isNicConfigEmpty     bool
+		isIPConfigEmpty      bool
+		vmssListCallingTimes int
+		vmssPutErr           *retry.Error
+		expectedErr          error
 	}{
 		{
 			description: "EnsureBackendPoolDeletedFromVMSets should remove a backend pool from the vmss",
 			vmssNamesMap: map[string]bool{
 				"vmssflex1": true,
 			},
-			backendPoolID:       "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
-			hasDefaultVMProfile: true,
-			expectedErr:         nil,
+			backendPoolID:        "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
+			hasDefaultVMProfile:  true,
+			vmssListCallingTimes: 2,
+			expectedErr:          nil,
 		},
 		{
 			description: "EnsureBackendPoolDeletedFromVMSets should return error if the vmss does not exist",
 			vmssNamesMap: map[string]bool{
 				"NonExistingVmssflex": true,
 			},
-			backendPoolID:       "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
-			hasDefaultVMProfile: true,
-			expectedErr:         cloudprovider.InstanceNotFound,
+			backendPoolID:        "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
+			hasDefaultVMProfile:  true,
+			vmssListCallingTimes: 1,
+			expectedErr:          cloudprovider.InstanceNotFound,
 		},
 		{
 			description: "EnsureBackendPoolDeletedFromVMSets should skip the vmss if it is deallocating",
 			vmssNamesMap: map[string]bool{
 				"vmssflex1": true,
 			},
-			backendPoolID:       "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
-			isVMSSDeallocating:  true,
-			hasDefaultVMProfile: true,
-			expectedErr:         nil,
+			backendPoolID:        "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
+			isVMSSDeallocating:   true,
+			hasDefaultVMProfile:  true,
+			vmssListCallingTimes: 1,
+			expectedErr:          nil,
 		},
 		{
 			description: "EnsureBackendPoolDeletedFromVMSets should skip the vmss does not have default VM profile",
 			vmssNamesMap: map[string]bool{
 				"vmssflex1": true,
 			},
-			backendPoolID:       "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
-			isVMSSDeallocating:  false,
-			hasDefaultVMProfile: false,
-			expectedErr:         nil,
+			backendPoolID:        "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
+			isVMSSDeallocating:   false,
+			hasDefaultVMProfile:  false,
+			vmssListCallingTimes: 1,
+			expectedErr:          nil,
 		},
 		{
-			description: "EnsureBackendPoolDeletedFromVMSets should skip the vmss does not have default VM profile",
+			description: "EnsureBackendPoolDeletedFromVMSets should skip the vmss has empty nic config",
 			vmssNamesMap: map[string]bool{
 				"vmssflex1": true,
 			},
-			backendPoolID:       "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
-			isVMSSDeallocating:  false,
-			hasDefaultVMProfile: true,
-			isNicConfigEmpty:    true,
-			expectedErr:         fmt.Errorf("failed to find a primary network configuration for the scale set \"vmssflex1\""),
+			backendPoolID:        "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
+			isVMSSDeallocating:   false,
+			hasDefaultVMProfile:  true,
+			isNicConfigEmpty:     true,
+			vmssListCallingTimes: 1,
+			expectedErr:          fmt.Errorf("failed to find a primary network configuration for the scale set \"vmssflex1\""),
 		},
 		{
-			description: "EnsureBackendPoolDeletedFromVMSets should skip the vmss does not have default VM profile",
+			description: "EnsureBackendPoolDeletedFromVMSets should skip the vmss has empty IP config",
 			vmssNamesMap: map[string]bool{
 				"vmssflex1": true,
 			},
-			backendPoolID:       "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
-			isVMSSDeallocating:  false,
-			hasDefaultVMProfile: true,
-			isNicConfigEmpty:    false,
-			isIPConfigEmpty:     true,
-			expectedErr:         fmt.Errorf("failed to find a primary IP configuration"),
+			backendPoolID:        "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
+			isVMSSDeallocating:   false,
+			hasDefaultVMProfile:  true,
+			isNicConfigEmpty:     false,
+			isIPConfigEmpty:      true,
+			vmssListCallingTimes: 1,
+			expectedErr:          fmt.Errorf("failed to find a primary IP configuration"),
 		},
 		{
 			description: "EnsureBackendPoolDeletedFromVMSets should skip the vmss if the backend pool is not in the vmss's backend pool list",
 			vmssNamesMap: map[string]bool{
 				"vmssflex1": true,
 			},
-			backendPoolID:       "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-1",
-			hasDefaultVMProfile: true,
-			expectedErr:         nil,
+			backendPoolID:        "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-1",
+			hasDefaultVMProfile:  true,
+			vmssListCallingTimes: 1,
+			expectedErr:          nil,
 		},
 		{
-			description: "EnsureBackendPoolDeletedFromVMSets should skip the vmss if the backend pool is not in the vmss's backend pool list",
+			description: "EnsureBackendPoolDeletedFromVMSets should skip the vmss update fails",
 			vmssNamesMap: map[string]bool{
 				"vmssflex1": true,
 			},
-			backendPoolID:       "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
-			hasDefaultVMProfile: true,
-			vmssPutErr:          &retry.Error{RawError: fmt.Errorf("failed to update nic")},
-			expectedErr:         fmt.Errorf("Retriable: false, RetryAfter: 0s, HTTPStatusCode: 0, RawError: failed to update nic"),
+			backendPoolID:        "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
+			hasDefaultVMProfile:  true,
+			vmssPutErr:           &retry.Error{RawError: fmt.Errorf("failed to update nic")},
+			vmssListCallingTimes: 2,
+			expectedErr:          fmt.Errorf("Retriable: false, RetryAfter: 0s, HTTPStatusCode: 0, RawError: failed to update nic"),
 		},
 	}
 
@@ -1648,7 +1666,7 @@ func TestEnsureBackendPoolDeletedFromVMSetsVmssFlex(t *testing.T) {
 		fs, err := NewTestFlexScaleSet(ctrl)
 		assert.NoError(t, err, "unexpected error when creating test FlexScaleSet")
 
-		testVmssFlex := genreteTestVmssFlex()
+		testVmssFlex := genreteTestVmssFlex("vmssflex1", testVmssFlex1ID)
 
 		if tc.isVMSSDeallocating {
 			testVmssFlex.ProvisioningState = to.StringPtr(consts.VirtualMachineScaleSetsDeallocating)
@@ -1666,11 +1684,12 @@ func TestEnsureBackendPoolDeletedFromVMSetsVmssFlex(t *testing.T) {
 		vmssFlexList := []compute.VirtualMachineScaleSet{testVmssFlex}
 
 		mockVMSSClient := fs.cloud.VirtualMachineScaleSetsClient.(*mockvmssclient.MockInterface)
-		mockVMSSClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(vmssFlexList, nil).AnyTimes()
+		mockVMSSClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(vmssFlexList, nil).Times(tc.vmssListCallingTimes)
 		mockVMSSClient.EXPECT().Get(gomock.Any(), gomock.Any(), gomock.Any()).Return(testVmssFlex1, nil).AnyTimes()
 		mockVMSSClient.EXPECT().CreateOrUpdate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(tc.vmssPutErr).AnyTimes()
 
 		err = fs.EnsureBackendPoolDeletedFromVMSets(tc.vmssNamesMap, tc.backendPoolID)
+		_, _ = fs.getVmssFlexByName("vmssflex1")
 
 		if tc.expectedErr != nil {
 			assert.EqualError(t, err, tc.expectedErr.Error(), tc.description)
@@ -1686,23 +1705,25 @@ func TestEnsureBackendPoolDeletedFromNodeVmssFlex(t *testing.T) {
 	defer ctrl.Finish()
 
 	testCases := []struct {
-		description       string
-		vmssFlexVMNameMap map[string]string
-		backendPoolID     string
-		nic               network.Interface
-		nicGetErr         *retry.Error
-		nicPutErr         *retry.Error
-		expectedErr       error
+		description         string
+		vmssFlexVMNameMap   map[string]string
+		backendPoolID       string
+		nic                 network.Interface
+		expectedPutNICTimes int
+		nicGetErr           *retry.Error
+		nicPutErr           *retry.Error
+		expectedErr         error
 	}{
 		{
 			description: "EnsureBackendPoolDeletedFromNode should remove a backend pool from the vmss flex vm",
 			vmssFlexVMNameMap: map[string]string{
 				"vmssflex1000001": "testvm1-nic",
 			},
-			backendPoolID: "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
-			nic:           generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded),
-			nicGetErr:     nil,
-			expectedErr:   nil,
+			backendPoolID:       "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
+			nic:                 generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/testvm1"),
+			expectedPutNICTimes: 1,
+			nicGetErr:           nil,
+			expectedErr:         nil,
 		},
 		{
 			description: "EnsureBackendPoolDeletedFromNode should remove a backend pool from the vmss flex vm",
@@ -1710,7 +1731,7 @@ func TestEnsureBackendPoolDeletedFromNodeVmssFlex(t *testing.T) {
 				"vmssflex1000001": "testvm1-nic",
 			},
 			backendPoolID: "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
-			nic:           generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded),
+			nic:           generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/testvm1"),
 			nicGetErr:     &retry.Error{RawError: fmt.Errorf("failed to get nic")},
 			expectedErr:   fmt.Errorf("ensureBackendPoolDeletedFromNode: failed to get interface of name testvm1-nic: Retriable: false, RetryAfter: 0s, HTTPStatusCode: 0, RawError: failed to get nic"),
 		},
@@ -1720,7 +1741,7 @@ func TestEnsureBackendPoolDeletedFromNodeVmssFlex(t *testing.T) {
 				"vmssflex1000001": "testvm1-nic",
 			},
 			backendPoolID: "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
-			nic:           generateTestNic("testvm1-nic", false, network.ProvisioningStateFailed),
+			nic:           generateTestNic("testvm1-nic", false, network.ProvisioningStateFailed, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/testvm1"),
 			nicGetErr:     nil,
 			expectedErr:   nil,
 		},
@@ -1729,11 +1750,12 @@ func TestEnsureBackendPoolDeletedFromNodeVmssFlex(t *testing.T) {
 			vmssFlexVMNameMap: map[string]string{
 				"vmssflex1000001": "testvm1-nic",
 			},
-			backendPoolID: "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
-			nic:           generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded),
-			nicGetErr:     nil,
-			nicPutErr:     &retry.Error{RawError: fmt.Errorf("failed to update nic")},
-			expectedErr:   fmt.Errorf("Retriable: false, RetryAfter: 0s, HTTPStatusCode: 0, RawError: failed to update nic"),
+			backendPoolID:       "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Network/loadBalancers/lb/backendAddressPools/backendpool-0",
+			nic:                 generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/testvm1"),
+			expectedPutNICTimes: 1,
+			nicGetErr:           nil,
+			nicPutErr:           &retry.Error{RawError: fmt.Errorf("failed to update nic")},
+			expectedErr:         fmt.Errorf("Retriable: false, RetryAfter: 0s, HTTPStatusCode: 0, RawError: failed to update nic"),
 		},
 	}
 
@@ -1743,14 +1765,17 @@ func TestEnsureBackendPoolDeletedFromNodeVmssFlex(t *testing.T) {
 
 		mockInterfacesClient := fs.InterfacesClient.(*mockinterfaceclient.MockInterface)
 		mockInterfacesClient.EXPECT().Get(gomock.Any(), gomock.Any(), "testvm1-nic", gomock.Any()).Return(tc.nic, tc.nicGetErr).AnyTimes()
-		mockInterfacesClient.EXPECT().CreateOrUpdate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(tc.nicPutErr).AnyTimes()
+		mockInterfacesClient.EXPECT().CreateOrUpdate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(tc.nicPutErr).Times(tc.expectedPutNICTimes)
 
-		err = fs.ensureBackendPoolDeletedFromNode(tc.vmssFlexVMNameMap, tc.backendPoolID)
+		updated, err := fs.ensureBackendPoolDeletedFromNode(tc.vmssFlexVMNameMap, tc.backendPoolID)
 
 		if tc.expectedErr != nil {
 			assert.EqualError(t, err, tc.expectedErr.Error(), tc.description)
 		} else {
 			assert.NoError(t, err, tc.description)
+			if tc.expectedPutNICTimes > 0 {
+				assert.True(t, updated, tc.description)
+			}
 		}
 	}
 
@@ -1793,7 +1818,7 @@ func TestEnsureBackendPoolDeletedVmssFlex(t *testing.T) {
 			testVMListWithoutInstanceView:  testVMListWithoutInstanceView,
 			testVMListWithOnlyInstanceView: testVMListWithOnlyInstanceView,
 			vmListErr:                      nil,
-			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded),
+			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/testvm1"),
 			nicGetErr:                      nil,
 			expectedErr:                    nil,
 		},
@@ -1809,7 +1834,7 @@ func TestEnsureBackendPoolDeletedVmssFlex(t *testing.T) {
 			testVMListWithoutInstanceView:  testVMListWithoutInstanceView,
 			testVMListWithOnlyInstanceView: testVMListWithOnlyInstanceView,
 			vmListErr:                      nil,
-			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded),
+			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/testvm1"),
 			nicGetErr:                      nil,
 			expectedErr:                    nil,
 		},
@@ -1825,14 +1850,14 @@ func TestEnsureBackendPoolDeletedVmssFlex(t *testing.T) {
 			testVMListWithoutInstanceView:  testVMListWithoutInstanceView,
 			testVMListWithOnlyInstanceView: testVMListWithOnlyInstanceView,
 			vmListErr:                      nil,
-			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded),
+			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/testvm1"),
 			nicGetErr:                      nil,
 			expectedErr:                    nil,
 		},
 		{
 			description:                    "EnsureBackendPoolDeleted should do nothing if the VMSetName does not match nic's vmss",
 			service:                        &v1.Service{},
-			vmSetName:                      "vmss",
+			vmSetName:                      "vmssflex2",
 			backendPoolID:                  testBackendPoolID0,
 			backendAddressPools:            testBackendPools,
 			deleteFromVMSet:                true,
@@ -1841,7 +1866,7 @@ func TestEnsureBackendPoolDeletedVmssFlex(t *testing.T) {
 			testVMListWithoutInstanceView:  testVMListWithoutInstanceView,
 			testVMListWithOnlyInstanceView: testVMListWithOnlyInstanceView,
 			vmListErr:                      nil,
-			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded),
+			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/testvm1"),
 			nicGetErr:                      nil,
 			expectedErr:                    nil,
 		},
@@ -1857,7 +1882,7 @@ func TestEnsureBackendPoolDeletedVmssFlex(t *testing.T) {
 			testVMListWithoutInstanceView:  testVMListWithoutInstanceView,
 			testVMListWithOnlyInstanceView: testVMListWithOnlyInstanceView,
 			vmListErr:                      nil,
-			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded),
+			nic:                            generateTestNic("testvm1-nic", false, network.ProvisioningStateSucceeded, "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/testvm1"),
 			nicGetErr:                      nil,
 			nicPutErr:                      &retry.Error{RawError: fmt.Errorf("failed to update nic")},
 			expectedErr:                    fmt.Errorf("Retriable: false, RetryAfter: 0s, HTTPStatusCode: 0, RawError: failed to update nic"),
@@ -1875,8 +1900,8 @@ func TestEnsureBackendPoolDeletedVmssFlex(t *testing.T) {
 			fs.EnableMultipleStandardLoadBalancers = true
 		}
 
-		testVmssFlex := genreteTestVmssFlex()
-		vmssFlexList := []compute.VirtualMachineScaleSet{testVmssFlex}
+		testVmssFlex := genreteTestVmssFlex("vmssflex1", testVmssFlex1ID)
+		vmssFlexList := []compute.VirtualMachineScaleSet{testVmssFlex, genreteTestVmssFlex("vmssflex2", testVmssFlex2ID)}
 
 		mockVMSSClient := fs.cloud.VirtualMachineScaleSetsClient.(*mockvmssclient.MockInterface)
 		mockVMSSClient.EXPECT().List(gomock.Any(), gomock.Any()).Return(vmssFlexList, nil).AnyTimes()
@@ -1891,7 +1916,7 @@ func TestEnsureBackendPoolDeletedVmssFlex(t *testing.T) {
 		mockInterfacesClient.EXPECT().Get(gomock.Any(), gomock.Any(), "testvm1-nic", gomock.Any()).Return(tc.nic, tc.nicGetErr).AnyTimes()
 		mockInterfacesClient.EXPECT().CreateOrUpdate(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(tc.nicPutErr).AnyTimes()
 
-		err = fs.EnsureBackendPoolDeleted(tc.service, tc.backendPoolID, tc.vmSetName, tc.backendAddressPools, tc.deleteFromVMSet)
+		_, err = fs.EnsureBackendPoolDeleted(tc.service, tc.backendPoolID, tc.vmSetName, tc.backendAddressPools, tc.deleteFromVMSet)
 
 		if tc.expectedErr != nil {
 			assert.EqualError(t, err, tc.expectedErr.Error(), tc.description)
