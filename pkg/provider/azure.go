@@ -1033,7 +1033,6 @@ func initDiskControllers(az *Cloud) error {
 		subscriptionID:        az.SubscriptionID,
 		cloud:                 az,
 		lockMap:               newLockMap(),
-		futureParser:          &controllerFutureParser{},
 	}
 
 	logger := klogr.NewWithOptions(klogr.WithFormat(klogr.FormatKlog)).WithName("cloud-provider-azure").WithValues("type", "batch")
@@ -1387,10 +1386,6 @@ func (az *Cloud) ShouldNodeExcludedFromLoadBalancer(nodeName string) (bool, erro
 	}
 
 	return az.excludeLoadBalancerNodes.Has(nodeName), nil
-}
-
-func (az *Cloud) FutureParser() FutureParser {
-	return az.futureParser
 }
 
 func isNodeReady(node *v1.Node) bool {
