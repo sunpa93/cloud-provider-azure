@@ -356,7 +356,7 @@ func (c *controllerCommon) attachDiskBatchToNode(ctx context.Context, subscripti
 
 		err = vmset.WaitForUpdateResult(resultCtx, future, nodeName, "attach_disk")
 	updateRetryLoop:
-		for c.vmUpdateRequired(future, err) {
+		for vmUpdateRequired(future, err) {
 			select {
 			case <-resultCtx.Done():
 				err = context.DeadlineExceeded
@@ -373,7 +373,7 @@ func (c *controllerCommon) attachDiskBatchToNode(ctx context.Context, subscripti
 		// if no error was returned, attach was successful
 		if err == nil {
 			klog.V(2).Infof("azuredisk - successfully attached disks to node %s: %s", nodeName, diskMap)
-		} else if !errors.Is(err, context.DeadlineExceeded) && configAccepted(future) {
+		} else if !errors.Is(err, context.DeadlineExceeded) && VMConfigAccepted(future) {
 			err = retry.NewPartialUpdateError(err.Error())
 		}
 
@@ -669,9 +669,9 @@ func (c *controllerCommon) checkDiskExists(ctx context.Context, diskURI string) 
 	return true, nil
 }
 
-func (c *controllerCommon) vmUpdateRequired(future *azure.Future, err error) bool {
+func vmUpdateRequired(future *azure.Future, err error) bool {
 	errCode := getErrorCode(err)
-	return configAccepted(future) && errCode != nil && *errCode == consts.OperationPreemptedErrorCode
+	return VMConfigAccepted(future) && errCode != nil && *errCode == consts.OperationPreemptedErrorCode
 }
 
 func getValidCreationData(subscriptionID, resourceGroup, sourceResourceID, sourceType string) (compute.CreationData, error) {
@@ -729,7 +729,7 @@ func getErrorCode(err error) *string {
 	return &matches[1]
 }
 
-func configAccepted(future *azure.Future) bool {
+func VMConfigAccepted(future *azure.Future) bool {
 	// if status code indicates success, the storage profile change was committed
 	return future != nil && future.Response() != nil && future.Response().StatusCode/100 == 2
 }
