@@ -476,8 +476,8 @@ func (c *controllerCommon) UpdateVM(ctx context.Context, nodeName types.NodeName
 	return vmset.UpdateVM(ctx, nodeName)
 }
 
-// getNodeDataDisks invokes vmSet interfaces to get data disks for the node.
-func (c *controllerCommon) getNodeDataDisks(nodeName types.NodeName, crt azcache.AzureCacheReadType) ([]compute.DataDisk, *string, error) {
+// GetNodeDataDisks invokes vmSet interfaces to get data disks for the node.
+func (c *controllerCommon) GetNodeDataDisks(nodeName types.NodeName, crt azcache.AzureCacheReadType) ([]compute.DataDisk, *string, error) {
 	vmset, err := c.getNodeVMSet(nodeName, crt)
 	if err != nil {
 		return nil, nil, err
@@ -488,9 +488,9 @@ func (c *controllerCommon) getNodeDataDisks(nodeName types.NodeName, crt azcache
 
 // GetDiskLun finds the lun on the host that the vhd is attached to, given a vhd's diskName and diskURI.
 func (c *controllerCommon) GetDiskLun(diskName, diskURI string, nodeName types.NodeName) (int32, *string, error) {
-	// getNodeDataDisks need to fetch the cached data/fresh data if cache expired here
+	// GetNodeDataDisks need to fetch the cached data/fresh data if cache expired here
 	// to ensure we get LUN based on latest entry.
-	disks, provisioningState, err := c.getNodeDataDisks(nodeName, azcache.CacheReadTypeDefault)
+	disks, provisioningState, err := c.GetNodeDataDisks(nodeName, azcache.CacheReadTypeDefault)
 	if err != nil {
 		klog.Errorf("error of getting data disks for node %s: %v", nodeName, err)
 		return -1, provisioningState, err
@@ -515,7 +515,7 @@ func (c *controllerCommon) GetDiskLun(diskName, diskURI string, nodeName types.N
 // SetDiskLun find unused luns and allocate lun for every disk in disksPendingAttach map.
 // Return err if not enough luns are found.
 func (c *controllerCommon) SetDiskLun(nodeName types.NodeName, disksPendingAttach map[string]*AttachDiskOptions) error {
-	disks, _, err := c.getNodeDataDisks(nodeName, azcache.CacheReadTypeDefault)
+	disks, _, err := c.GetNodeDataDisks(nodeName, azcache.CacheReadTypeDefault)
 	if err != nil {
 		klog.Errorf("error of getting data disks for node %s: %v", nodeName, err)
 		return err
@@ -586,14 +586,14 @@ func (c *controllerCommon) DisksAreAttached(diskNames []string, nodeName types.N
 		attached[diskName] = false
 	}
 
-	// doing stalled read for getNodeDataDisks to ensure we don't call ARM
+	// doing stalled read for GetNodeDataDisks to ensure we don't call ARM
 	// for every reconcile call. The cache is invalidated after Attach/Detach
 	// disk. So the new entry will be fetched and cached the first time reconcile
 	// loop runs after the Attach/Disk OP which will reflect the latest model.
-	disks, _, err := c.getNodeDataDisks(nodeName, azcache.CacheReadTypeUnsafe)
+	disks, _, err := c.GetNodeDataDisks(nodeName, azcache.CacheReadTypeUnsafe)
 	if err != nil {
 		if errors.Is(err, cloudprovider.InstanceNotFound) {
-			// if host doesn't exist, no need to detach
+			// if host doesn't exist, no need to detach.
 			klog.Warningf("azureDisk - Cannot find node %s, DisksAreAttached will assume disks %v are not attached to it.",
 				nodeName, diskNames)
 			return attached, nil
