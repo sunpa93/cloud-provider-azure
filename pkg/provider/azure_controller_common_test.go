@@ -1035,8 +1035,6 @@ func TestVmUpdateRequired(t *testing.T) {
 
 	rejectedFuture, _ := azure.NewFutureFromResponse(r)
 
-	azCloud := GetTestCloud(ctrl)
-
 	testCases := []struct {
 		desc           string
 		configAccepted bool
@@ -1071,7 +1069,7 @@ func TestVmUpdateRequired(t *testing.T) {
 			} else {
 				future = &rejectedFuture
 			}
-			result := azCloud.vmUpdateRequired(future, test.err)
+			result := vmUpdateRequired(future, test.err)
 			assert.Equalf(t, test.expectedResult, result, "TestCase[%d] returned %v", i, result)
 		})
 	}
