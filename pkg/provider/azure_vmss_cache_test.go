@@ -17,16 +17,17 @@ limitations under the License.
 package provider
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-03-01/compute"
-	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 
 	cloudprovider "k8s.io/cloud-provider"
+	"k8s.io/utils/pointer"
 
 	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/vmclient/mockvmclient"
 	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/vmssclient/mockvmssclient"
@@ -35,50 +36,6 @@ import (
 	"sigs.k8s.io/cloud-provider-azure/pkg/retry"
 )
 
-func TestExtractVmssVMName(t *testing.T) {
-	cases := []struct {
-		description        string
-		vmName             string
-		expectError        bool
-		expectedScaleSet   string
-		expectedInstanceID string
-	}{
-		{
-			description: "wrong vmss VM name should report error",
-			vmName:      "vm1234",
-			expectError: true,
-		},
-		{
-			description: "wrong VM name separator should report error",
-			vmName:      "vm-1234",
-			expectError: true,
-		},
-		{
-			description:        "correct vmss VM name should return correct ScaleSet and instanceID",
-			vmName:             "vm_1234",
-			expectedScaleSet:   "vm",
-			expectedInstanceID: "1234",
-		},
-		{
-			description:        "correct vmss VM name with Extra Separator should return correct ScaleSet and instanceID",
-			vmName:             "vm_test_1234",
-			expectedScaleSet:   "vm_test",
-			expectedInstanceID: "1234",
-		},
-	}
-
-	for _, c := range cases {
-		ssName, instanceID, err := extractVmssVMName(c.vmName)
-		if c.expectError {
-			assert.Error(t, err, c.description)
-			continue
-		}
-
-		assert.Equal(t, c.expectedScaleSet, ssName, c.description)
-		assert.Equal(t, c.expectedInstanceID, instanceID, c.description)
-	}
-}
-
 func TestVMSSVMCache(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -86,7 +43,7 @@ func TestVMSSVMCache(t *testing.T) {
 	vmList := []string{"vmssee6c2000000", "vmssee6c2000001", "vmssee6c2000002"}
 	c := GetTestCloud(ctrl)
 	c.DisableAvailabilitySetNodes = true
-	vmSet, err := newScaleSet(c)
+	vmSet, err := newScaleSet(context.Background(), c)
 	assert.NoError(t, err)
 	ss := vmSet.(*ScaleSet)
 
@@ -104,18 +61,18 @@ func TestVMSSVMCache(t *testing.T) {
 	// validate getting VMSS VM via cache.
 	for i := range expectedVMs {
 		vm := expectedVMs[i]
-		vmName := to.String(vm.OsProfile.ComputerName)
+		vmName := pointer.StringDeref(vm.OsProfile.ComputerName, "")
 		realVM, err := ss.getVmssVM(vmName, azcache.CacheReadTypeDefault)
 		assert.NoError(t, err)
 		assert.NotNil(t, realVM)
 		assert.Equal(t, "vmss", realVM.VMSSName)
-		assert.Equal(t, to.String(vm.InstanceID), realVM.InstanceID)
+		assert.Equal(t, pointer.StringDeref(vm.InstanceID, ""), realVM.InstanceID)
 		assert.Equal(t, &vm, realVM.AsVirtualMachineScaleSetVM())
 	}
 
 	// validate DeleteCacheForNode().
 	vm := expectedVMs[0]
-	vmName := to.String(vm.OsProfile.ComputerName)
+	vmName := pointer.StringDeref(vm.OsProfile.ComputerName, "")
 	err = ss.DeleteCacheForNode(vmName)
 	assert.NoError(t, err)
 
@@ -123,7 +80,7 @@ func TestVMSSVMCache(t *testing.T) {
 	realVM, err := ss.getVmssVM(vmName, azcache.CacheReadTypeDefault)
 	assert.NoError(t, err)
 	assert.Equal(t, "vmss", realVM.VMSSName)
-	assert.Equal(t, to.String(vm.InstanceID), realVM.InstanceID)
+	assert.Equal(t, pointer.StringDeref(vm.InstanceID, ""), realVM.InstanceID)
 	assert.Equal(t, &vm, realVM.AsVirtualMachineScaleSetVM())
 }
 
@@ -141,7 +98,7 @@ func TestVMSSVMCacheWithDeletingNodes(t *testing.T) {
 	ss.cloud.VirtualMachineScaleSetVMsClient = mockVMSSVMClient
 
 	expectedScaleSet := compute.VirtualMachineScaleSet{
-		Name:                             to.StringPtr(testVMSSName),
+		Name:                             pointer.String(testVMSSName),
 		VirtualMachineScaleSetProperties: &compute.VirtualMachineScaleSetProperties{},
 	}
 	mockVMSSClient.EXPECT().List(gomock.Any(), gomock.Any()).Return([]compute.VirtualMachineScaleSet{expectedScaleSet}, nil).AnyTimes()
@@ -151,8 +108,8 @@ func TestVMSSVMCacheWithDeletingNodes(t *testing.T) {
 
 	for i := range expectedVMs {
 		vm := expectedVMs[i]
-		vmName := to.String(vm.OsProfile.ComputerName)
-		assert.Equal(t, vm.ProvisioningState, to.StringPtr(string(compute.ProvisioningStateDeleting)))
+		vmName := pointer.StringDeref(vm.OsProfile.ComputerName, "")
+		assert.Equal(t, vm.ProvisioningState, pointer.String(string(compute.ProvisioningStateDeleting)))
 
 		realVM, err := ss.getVmssVM(vmName, azcache.CacheReadTypeDefault)
 		assert.Nil(t, realVM)
@@ -181,11 +138,11 @@ func TestVMSSVMCacheClearedWhenRGDeleted(t *testing.T) {
 
 	// validate getting VMSS VM via cache.
 	vm := expectedVMs[0]
-	vmName := to.String(vm.OsProfile.ComputerName)
+	vmName := pointer.StringDeref(vm.OsProfile.ComputerName, "")
 	realVM, err := ss.getVmssVM(vmName, azcache.CacheReadTypeDefault)
 	assert.NoError(t, err)
 	assert.Equal(t, "vmss", realVM.VMSSName)
-	assert.Equal(t, to.String(vm.InstanceID), realVM.InstanceID)
+	assert.Equal(t, pointer.StringDeref(vm.InstanceID, ""), realVM.InstanceID)
 	assert.Equal(t, &vm, realVM.AsVirtualMachineScaleSetVM())
 
 	// verify cache has test vmss.
@@ -372,7 +329,7 @@ func TestGetVMManagementTypeByIPConfigurationID(t *testing.T) {
 	testVM1 := generateVmssFlexTestVMWithoutInstanceView(testVM1Spec)
 	testVM2 := generateVmssFlexTestVMWithoutInstanceView(testVM2Spec)
 	testVM2.VirtualMachineScaleSet = nil
-	testVM2.VirtualMachineProperties.OsProfile.ComputerName = to.StringPtr("testvm2")
+	testVM2.VirtualMachineProperties.OsProfile.ComputerName = pointer.String("testvm2")
 
 	testVMList := []compute.VirtualMachine{
 		testVM1,
@@ -443,5 +400,34 @@ func TestGetVMManagementTypeByIPConfigurationID(t *testing.T) {
 			assert.EqualError(t, err, tc.expectedErr.Error(), tc.description)
 		}
 
+	}
+}
+
+func TestVMSSUpdateCache(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ss, err := NewTestScaleSet(ctrl)
+	assert.NoError(t, err, "unexpected error when creating test ScaleSet")
+
+	testCases := []struct {
+		description                 string
+		nodeName, resourceGroupName string
+		vmssName, instanceID        string
+		vm                          *compute.VirtualMachineScaleSetVM
+		disableUpdateCache          bool
+		expectedErr                 error
+	}{
+		{
+			description:        "disableUpdateCache is set",
+			disableUpdateCache: true,
+			expectedErr:        nil,
+		},
+	}
+
+	for _, test := range testCases {
+		ss.DisableUpdateCache = test.disableUpdateCache
+		err = ss.updateCache(test.nodeName, test.nodeName, test.resourceGroupName, test.instanceID, test.vm)
+		assert.Equal(t, test.expectedErr, err, test.description)
 	}
 }

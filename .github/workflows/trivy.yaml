@@ -6,6 +6,8 @@ on:
     paths:
       - '.github/workflows/trivy.yaml'
       - 'pkg/**.go'
+      - '!pkg/azureclients/v2/**.go'
+      - '!kubetest2-aks/**.go'
       - 'cmd/**.go'
       - 'go.*'
       - '!vendor/**'
@@ -14,6 +16,8 @@ on:
     paths:
       - '.github/workflows/trivy.yaml'
       - 'pkg/**.go'
+      - '!pkg/azureclients/v2/**.go'
+      - '!kubetest2-aks/**.go'
       - 'cmd/**.go'
       - 'go.*'
       - '!vendor/**'
@@ -21,7 +25,7 @@ on:
 jobs:
   build:
     name: Build
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -35,7 +39,7 @@ jobs:
           export TAG=trivy
           make build-ccm-image
           make build-node-image-linux-amd64
-      
+
       - name: Run Trivy scanner CCM
         uses: aquasecurity/trivy-action@master
         with:

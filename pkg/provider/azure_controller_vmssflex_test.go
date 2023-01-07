@@ -22,11 +22,14 @@ import (
 	"testing"
 
 	"github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-03-01/compute"
-	"github.com/Azure/go-autorest/autorest/to"
+	"github.com/Azure/go-autorest/autorest/azure"
+	autorestmocks "github.com/Azure/go-autorest/autorest/mocks"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/types"
 	cloudprovider "k8s.io/cloud-provider"
+	"k8s.io/utils/pointer"
+
 	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/vmclient/mockvmclient"
 	"sigs.k8s.io/cloud-provider-azure/pkg/azureclients/vmssclient/mockvmssclient"
 	azcache "sigs.k8s.io/cloud-provider-azure/pkg/cache"
@@ -43,6 +46,7 @@ func TestAttachDiskWithVmssFlex(t *testing.T) {
 		description                    string
 		nodeName                       types.NodeName
 		vmName                         string
+		inconsistentLUN                bool
 		testVMListWithoutInstanceView  []compute.VirtualMachine
 		testVMListWithOnlyInstanceView []compute.VirtualMachine
 		vmListErr                      error
@@ -78,6 +82,17 @@ func TestAttachDiskWithVmssFlex(t *testing.T) {
 			vmssFlexVMUpdateError:          &retry.Error{HTTPStatusCode: http.StatusNotFound, RawError: cloudprovider.InstanceNotFound},
 			expectedErr:                    fmt.Errorf("Retriable: false, RetryAfter: 0s, HTTPStatusCode: 404, RawError: instance not found"),
 		},
+		{
+			description:                    "error should be returned when disk lun is inconsistent",
+			nodeName:                       types.NodeName(testVM1Spec.ComputerName),
+			vmName:                         testVM1Spec.VMName,
+			inconsistentLUN:                true,
+			testVMListWithoutInstanceView:  testVMListWithoutInstanceView,
+			testVMListWithOnlyInstanceView: testVMListWithOnlyInstanceView,
+			vmListErr:                      nil,
+			vmssFlexVMUpdateError:          nil,
+			expectedErr:                    fmt.Errorf("disk(uri) already attached to node(vmssflex1000001) on LUN(1), but target LUN is 63"),
+		},
 	}
 
 	for _, tc := range testCases {
@@ -94,11 +109,14 @@ func TestAttachDiskWithVmssFlex(t *testing.T) {
 		mockVMClient.EXPECT().UpdateAsync(gomock.Any(), gomock.Any(), tc.vmName, gomock.Any(), gomock.Any()).Return(nil, tc.vmssFlexVMUpdateError).AnyTimes()
 
 		options := AttachDiskOptions{
-			lun:                     0,
-			diskName:                "",
+			lun:                     1,
+			diskName:                "diskname",
 			cachingMode:             compute.CachingTypesReadOnly,
 			diskEncryptionSetID:     "",
 			writeAcceleratorEnabled: false,
+		}
+		if tc.inconsistentLUN {
+			options.lun = 63
 		}
 		diskMap := map[string]*AttachDiskOptions{
 			"uri": &options,
@@ -186,7 +204,7 @@ func TestDettachDiskWithVmssFlex(t *testing.T) {
 		mockVMClient.EXPECT().ListVmssFlexVMsWithoutInstanceView(gomock.Any(), gomock.Any()).Return(tc.testVMListWithoutInstanceView, tc.vmListErr).AnyTimes()
 		mockVMClient.EXPECT().ListVmssFlexVMsWithOnlyInstanceView(gomock.Any(), gomock.Any()).Return(tc.testVMListWithOnlyInstanceView, tc.vmListErr).AnyTimes()
 
-		mockVMClient.EXPECT().Update(gomock.Any(), gomock.Any(), tc.vmName, gomock.Any(), "detach_disk").Return(tc.vmssFlexVMUpdateError).AnyTimes()
+		mockVMClient.EXPECT().Update(gomock.Any(), gomock.Any(), tc.vmName, gomock.Any(), "detach_disk").Return(nil, tc.vmssFlexVMUpdateError).AnyTimes()
 
 		err = fs.DetachDisk(ctx, tc.nodeName, tc.diskMap)
 		if tc.expectedErr == nil {
@@ -247,7 +265,15 @@ func TestUpdateVMWithVmssFlex(t *testing.T) {
 		mockVMClient := fs.VirtualMachinesClient.(*mockvmclient.MockInterface)
 		mockVMClient.EXPECT().ListVmssFlexVMsWithoutInstanceView(gomock.Any(), gomock.Any()).Return(tc.testVMListWithoutInstanceView, tc.vmListErr).AnyTimes()
 		mockVMClient.EXPECT().ListVmssFlexVMsWithOnlyInstanceView(gomock.Any(), gomock.Any()).Return(tc.testVMListWithOnlyInstanceView, tc.vmListErr).AnyTimes()
-		mockVMClient.EXPECT().Update(gomock.Any(), gomock.Any(), tc.vmName, gomock.Any(), "update_vm").Return(tc.vmssFlexVMUpdateError).AnyTimes()
+
+		r := autorestmocks.NewResponseWithStatus("200", 200)
+		r.Request.Method = http.MethodPut
+
+		future, err := azure.NewFutureFromResponse(r)
+
+		mockVMClient.EXPECT().UpdateAsync(gomock.Any(), gomock.Any(), tc.vmName, gomock.Any(), "update_vm").Return(&future, err).AnyTimes()
+		mockVMClient.EXPECT().WaitForUpdateResult(gomock.Any(), &future, gomock.Any(), gomock.Any()).Return(nil, tc.vmssFlexVMUpdateError).AnyTimes()
+		mockVMClient.EXPECT().Update(gomock.Any(), gomock.Any(), tc.vmName, gomock.Any(), "update_vm").Return(nil, tc.vmssFlexVMUpdateError).AnyTimes()
 
 		err = fs.UpdateVM(ctx, tc.nodeName)
 
@@ -281,8 +307,9 @@ func TestGetDataDisksWithVmssFlex(t *testing.T) {
 			vmListErr:                      nil,
 			expectedDataDisks: []compute.DataDisk{
 				{
-					Lun:  to.Int32Ptr(1),
-					Name: to.StringPtr("dataDisktestvm1"),
+					Lun:         pointer.Int32(1),
+					Name:        pointer.String("dataDisktestvm1"),
+					ManagedDisk: &compute.ManagedDiskParameters{ID: pointer.String("uri")},
 				},
 			},
 			expectedErr: nil,
@@ -315,5 +342,63 @@ func TestGetDataDisksWithVmssFlex(t *testing.T) {
 			assert.EqualError(t, err, tc.expectedErr.Error(), tc.description)
 		}
 	}
+}
 
+func TestVMSSFlexUpdateCache(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	fs, err := NewTestFlexScaleSet(ctrl)
+	assert.NoError(t, err, "unexpected error when creating test FlexScaleSet")
+
+	testCases := []struct {
+		description        string
+		nodeName           string
+		vm                 *compute.VirtualMachine
+		disableUpdateCache bool
+		expectedErr        error
+	}{
+		{
+			description: "vm is nil",
+			nodeName:    "vmssflex1000001",
+			expectedErr: fmt.Errorf("vm is nil"),
+		},
+		{
+			description: "vm.VirtualMachineProperties is nil",
+			nodeName:    "vmssflex1000001",
+			vm:          &compute.VirtualMachine{Name: pointer.String("vmssflex1000001")},
+			expectedErr: fmt.Errorf("vm.VirtualMachineProperties is nil"),
+		},
+		{
+			description: "vm.OsProfile.ComputerName is nil",
+			nodeName:    "vmssflex1000001",
+			vm: &compute.VirtualMachine{
+				Name:                     pointer.String("vmssflex1000001"),
+				VirtualMachineProperties: &compute.VirtualMachineProperties{},
+			},
+			expectedErr: fmt.Errorf("vm.OsProfile.ComputerName is nil"),
+		},
+		{
+			description: "vm.OsProfile.ComputerName is nil",
+			nodeName:    "vmssflex1000001",
+			vm: &compute.VirtualMachine{
+				Name: pointer.String("vmssflex1000001"),
+				VirtualMachineProperties: &compute.VirtualMachineProperties{
+					OsProfile: &compute.OSProfile{},
+				},
+			},
+			expectedErr: fmt.Errorf("vm.OsProfile.ComputerName is nil"),
+		},
+		{
+			description:        "disableUpdateCache is set",
+			disableUpdateCache: true,
+			expectedErr:        nil,
+		},
+	}
+
+	for _, test := range testCases {
+		fs.DisableUpdateCache = test.disableUpdateCache
+		err = fs.updateCache(test.nodeName, test.vm)
+		assert.Equal(t, test.expectedErr, err, test.description)
+	}
 }
