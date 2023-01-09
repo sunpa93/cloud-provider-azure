@@ -359,7 +359,7 @@ func (c *controllerCommon) attachDiskBatchToNode(ctx context.Context, subscripti
 			}
 		}
 
-		err = c.waitForUpdateResult(ctx, vmset, nodeName, future, err)
+		err = c.waitForUpdateResult(resultCtx, vmset, nodeName, future, err)
 
 		for i, disk := range disksToAttach {
 			lunChans[i] <- attachDiskResult{lun: diskMap[disk.diskURI].lun, err: err}
