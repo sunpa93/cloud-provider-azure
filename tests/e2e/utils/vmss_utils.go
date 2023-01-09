@@ -19,14 +19,15 @@ package utils
 import (
 	"context"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 
 	azcompute "github.com/Azure/azure-sdk-for-go/services/compute/mgmt/2022-03-01/compute"
-	"github.com/Azure/go-autorest/autorest/to"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/utils/pointer"
 )
 
 var (
@@ -53,9 +54,17 @@ func FindTestVMSS(tc *AzureTestClient, rgName string) (*azcompute.VirtualMachine
 	return &vmssList[0], nil
 }
 
+func Scale(tc *AzureTestClient, vmssName string, instanceCount int64) error {
+	if strings.EqualFold(os.Getenv(CAPZTestCCM), "true") {
+		return ScaleMachinePool(vmssName, instanceCount)
+	}
+	return ScaleVMSS(tc, vmssName, instanceCount)
+}
+
 // ScaleVMSS scales the given VMSS
-func ScaleVMSS(tc *AzureTestClient, vmssName, rgName string, instanceCount int64) (err error) {
+func ScaleVMSS(tc *AzureTestClient, vmssName string, instanceCount int64) (err error) {
 	Logf("ScaleVMSS: start")
+	rgName := tc.GetResourceGroup()
 
 	vmssClient := tc.createVMSSClient()
 
@@ -64,10 +73,10 @@ func ScaleVMSS(tc *AzureTestClient, vmssName, rgName string, instanceCount int64
 		return err
 	}
 	parameters := azcompute.VirtualMachineScaleSet{
-		Location: to.StringPtr(tc.GetLocation()),
+		Location: vmss.Location,
 		Sku: &azcompute.Sku{
 			Name:     vmss.Sku.Name,
-			Capacity: to.Int64Ptr(instanceCount),
+			Capacity: pointer.Int64(instanceCount),
 		},
 	}
 
@@ -178,10 +187,11 @@ func ValidateClusterNodesMatchVMSSInstances(tc *AzureTestClient, expectedCap map
 				Logf("Failed to validate VMSS instances: %s", err)
 			}
 
-			Logf("Matching cluster nodes[%s] with VMSS instances[%s]",
+			Logf("Matching cluster nodes[%s] with VMSS instances[%s]\nExpected capacity: %v, actual capacity: %v",
 				strings.Join(nodeSet.List(), ","),
-				strings.Join(instanceSet.List(), ","))
-			Logf("Expected capacity: %v, actual one: %v", expectedCap, actualCap)
+				strings.Join(instanceSet.List(), ","),
+				expectedCap,
+				actualCap)
 		}()
 
 		nodes, err = GetAgentNodes(k8sCli)
@@ -196,6 +206,10 @@ func ValidateClusterNodesMatchVMSSInstances(tc *AzureTestClient, expectedCap map
 		vmssList, _ := ListUniformVMSSes(tc)
 		capMatch := true
 		for _, vmss := range vmssList {
+			cap, ok := expectedCap[*vmss.Name]
+			if !ok {
+				continue
+			}
 			vms, err := ListVMSSVMs(tc, *vmss.Name)
 			if err != nil {
 				return false, err
@@ -210,15 +224,23 @@ func ValidateClusterNodesMatchVMSSInstances(tc *AzureTestClient, expectedCap map
 				vmssInstanceSet.Insert(strings.ToLower(nodeName))
 				instanceSet.Insert(strings.ToLower(nodeName))
 			}
-			cap, ok := expectedCap[*vmss.Name]
-			if ok {
-				actualCap[*vmss.Name] = *vmss.Sku.Capacity
-				// For autoscaling cluster, simply comparing the capacity may not work since if the number of current nodes is lower than the "minCount", a new node may be created after scaling down.
-				// In this situation, we compare the expected capacity with the length of intersection between original nodes and current nodes.
-				if cap != *vmss.Sku.Capacity && cap != int64(originalNodeSet.Intersection(vmssInstanceSet).Len()) {
+
+			actualCap[*vmss.Name] = *vmss.Sku.Capacity
+			if cap != *vmss.Sku.Capacity {
+				if !strings.Contains(os.Getenv(AKSClusterType), "autoscaling") {
 					capMatch = false
-					Logf("VMSS %q sku capacity is expected to be %d, but actually %d", *vmss.Name, cap, *vmss.Sku.Capacity)
+					break
 				}
+				if cap != int64(originalNodeSet.Intersection(vmssInstanceSet).Len()) {
+					// For autoscaling cluster, simply comparing the capacity may not work since if the number of current nodes is lower than the "minCount", a new node may be created after scaling down.
+					// In this situation, we compare the expected capacity with the length of intersection between original nodes and current nodes.
+					Logf("VMSS %q sku capacity is expected to be %d, but actually %d", *vmss.Name, cap, *vmss.Sku.Capacity)
+					capMatch = false
+					break
+				}
+			} else if int64(len(nodeSet)) != cap {
+				capMatch = false
+				break
 			}
 		}
 

@@ -28,11 +28,11 @@ import (
 	"github.com/Azure/azure-sdk-for-go/services/network/mgmt/2021-08-01/network"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	clientset "k8s.io/client-go/kubernetes"
+
 	"sigs.k8s.io/cloud-provider-azure/tests/e2e/utils"
 )
 
@@ -322,11 +322,11 @@ var _ = Describe("Azure nodes", func() {
 
 		utils.Logf("scaling VMSS")
 		count := *vmss.Sku.Capacity
-		err = utils.ScaleVMSS(tc, *vmss.Name, tc.GetResourceGroup(), int64(vmssScaleUpCelling))
+		err = utils.ScaleVMSS(tc, *vmss.Name, int64(vmssScaleUpCelling))
 
 		defer func() {
 			utils.Logf("restoring VMSS")
-			err = utils.ScaleVMSS(tc, *vmss.Name, tc.GetResourceGroup(), count)
+			err = utils.ScaleVMSS(tc, *vmss.Name, count)
 			Expect(err).NotTo(HaveOccurred())
 		}()
 
