@@ -448,7 +448,7 @@ func TestWaitForUpdateResult(t *testing.T) {
 			r.Request.Method = http.MethodPut
 			future, _ := azure.NewFutureFromResponse(r)
 
-			err := testCloud.waitForUpdateResult(ctx, testCloud.VMSet, types.NodeName(tt.nodeName), &future, nil)
+			err := testCloud.WaitForUpdateResult(ctx, testCloud.VMSet, types.NodeName(tt.nodeName), &future, nil)
 
 			assert.Equal(t, tt.expectErr, err != nil, "TestCase[%d]: %s, return error: %v", i, tt.desc, err)
 

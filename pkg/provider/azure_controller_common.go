@@ -359,7 +359,7 @@ func (c *controllerCommon) attachDiskBatchToNode(ctx context.Context, subscripti
 			}
 		}
 
-		err = c.waitForUpdateResult(resultCtx, vmset, nodeName, future, err)
+		err = c.WaitForUpdateResult(resultCtx, vmset, nodeName, future, err)
 
 		for i, disk := range disksToAttach {
 			lunChans[i] <- attachDiskResult{lun: diskMap[disk.diskURI].lun, err: err}
@@ -375,8 +375,8 @@ func (c *controllerCommon) attachDiskBatchToNode(ctx context.Context, subscripti
 	return lunChans, nil
 }
 
-// waitForUpdateResult handles asynchronous VM update operations and retries with backoff if OperationPreempted error is observed
-func (c *controllerCommon) waitForUpdateResult(ctx context.Context, vmset VMSet, nodeName types.NodeName, future *azure.Future, updateErr error) (err error) {
+// WaitForUpdateResult handles asynchronous VM update operations and retries with backoff if OperationPreempted error is observed
+func (c *controllerCommon) WaitForUpdateResult(ctx context.Context, vmset VMSet, nodeName types.NodeName, future *azure.Future, updateErr error) (err error) {
 	err = updateErr
 	if err == nil {
 		err = vmset.WaitForUpdateResult(ctx, future, nodeName, "attach_disk")
